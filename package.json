@@ -1,0 +1,15 @@
+{
+  "name": "captio",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:extension": "pnpm --filter extension dev",
+    "build:web": "pnpm --filter web build",
+    "build:extension": "pnpm --filter extension build"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "pnpm@9.1.0"
+}

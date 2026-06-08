@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@captio/ui": [
+        "../../packages/ui/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    ".plasmo/index.d.ts",
+    "."
+  ]
+}
