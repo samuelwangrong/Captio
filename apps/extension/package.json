@@ -26,6 +26,4 @@
   },
   "manifest": {
     "host_permissions": ["https://www.youtube.com/*"],
-    "permissions": ["storage", "tabs", "activeTab"]
-  }
-}
+    "permissions": ["storage", "tabs", "activeTab", "tabCa

@@ -10,17 +10,6 @@ const STATUS_CONFIG: Record<Status, { label: string; color: string; pulse: boole
   error:        { label: "Error — retry", color: "bg-error",          pulse: false },
 }
 
-const LANGUAGES = [
-  { code: "en-US", label: "English (US)",  flag: "🇺🇸" },
-  { code: "ja",    label: "Japanese",      flag: "🇯🇵" },
-  { code: "es",    label: "Spanish",       flag: "🇪🇸" },
-  { code: "fr",    label: "French",        flag: "🇫🇷" },
-  { code: "de",    label: "German",        flag: "🇩🇪" },
-  { code: "pt",    label: "Portuguese",    flag: "🇧🇷" },
-  { code: "zh",    label: "Chinese",       flag: "🇨🇳" },
-  { code: "ko",    label: "Korean",        flag: "🇰🇷" },
-]
-
 function Toggle({ active, onChange }: { active: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
@@ -41,62 +30,52 @@ function Toggle({ active, onChange }: { active: boolean; onChange: (v: boolean) 
 }
 
 export default function Popup() {
-  const [enabled, setEnabled]       = useState(true)
-  const [status, setStatus]         = useState<Status>("ready")
-  const [language, setLanguage]     = useState("en-US")
-  const [langOpen, setLangOpen]     = useState(false)
+  const [enabled, setEnabled]       = useState(false)
+  const [status, setStatus]         = useState<Status>("idle")
   const [videoTitle, setVideoTitle] = useState("Loading…")
   const [userEmail, setUserEmail]   = useState<string | null>(null)
 
-  // Load persisted state from chrome.storage
   useEffect(() => {
-    chrome.storage.local.get(["enabled", "language", "userEmail"], (result) => {
-      if (result.enabled !== undefined) setEnabled(result.enabled)
-      if (result.language)             setLanguage(result.language)
-      if (result.userEmail)            setUserEmail(result.userEmail)
+    chrome.storage.local.get(["userEmail"], (result) => {
+      if (result.userEmail) setUserEmail(result.userEmail)
     })
 
-    // Get the current tab's video title
+    // Sync toggle + status with actual background state on open
+    chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
+      if (response) {
+        setEnabled(response.isCapturing)
+        setStatus(response.isCapturing ? "transcribing" : "idle")
+      }
+    })
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const title = tabs[0]?.title?.replace(" - YouTube", "") ?? "YouTube Video"
       setVideoTitle(title)
     })
   }, [])
 
-  const handleToggle = (val: boolean) => {
-    setEnabled(val)
-    chrome.storage.local.set({ enabled: val })
-    // Notify the content script on the active tab
+  const handleToggle = (_val: boolean) => {
+    // Query the active tab from the popup context (more reliable than querying from the service worker)
+    // then pass the tab ID along with the toggle message.
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: "TOGGLE_CAPTIONS", enabled: val })
-      }
-    })
-  }
-
-  const handleLanguage = (code: string) => {
-    setLanguage(code)
-    setLangOpen(false)
-    chrome.storage.local.set({ language: code })
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: "SET_LANGUAGE", language: code })
-      }
+      const tabId = tabs[0]?.id
+      chrome.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId }, (response) => {
+        if (response) {
+          setEnabled(response.isCapturing)
+          setStatus(response.isCapturing ? "transcribing" : "idle")
+        }
+      })
     })
   }
 
   const openOptions = () => chrome.runtime.openOptionsPage()
-
-  const selectedLang = LANGUAGES.find((l) => l.code === language) ?? LANGUAGES[0]
-  const statusCfg    = STATUS_CONFIG[status]
+  const statusCfg   = STATUS_CONFIG[status]
 
   return (
     <div className="dark bg-bg text-text-primary w-[360px] h-[480px] flex flex-col overflow-hidden font-sans">
       {/* Header */}
       <header className="flex items-center justify-between px-space-4 h-14 border-b border-border shrink-0">
-        <div className="flex items-center gap-space-2">
-          <span className="text-[15px] font-bold text-primary tracking-tight">Captio</span>
-        </div>
+        <span className="text-[15px] font-bold text-primary tracking-tight">Captio</span>
         <button
           onClick={openOptions}
           className="p-space-2 rounded-md hover:bg-surface-variant transition-colors"
@@ -106,7 +85,7 @@ export default function Popup() {
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-space-4 py-space-4 flex flex-col">
+      <main className="flex-1 px-space-4 py-space-4 flex flex-col">
         {/* Video row */}
         <section className="bg-surface p-space-3 rounded-xl border border-border mb-space-4">
           <div className="flex items-center gap-space-3">
@@ -127,49 +106,9 @@ export default function Popup() {
         {/* Status pill */}
         <section className="flex items-center justify-center py-space-2 mb-space-4">
           <div className="flex items-center gap-space-2 bg-surface px-space-4 py-2 rounded-full border border-border">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${statusCfg.color} ${
-                statusCfg.pulse ? "animate-pulse" : ""
-              }`}
-            />
-            <span className="text-label uppercase tracking-wider text-on-surface">
-              {statusCfg.label}
-            </span>
+            <span className={`w-2.5 h-2.5 rounded-full ${statusCfg.color} ${statusCfg.pulse ? "animate-pulse" : ""}`} />
+            <span className="text-label uppercase tracking-wider text-on-surface">{statusCfg.label}</span>
           </div>
-        </section>
-
-        <div className="h-px bg-border w-full mb-space-4" />
-
-        {/* Language row */}
-        <section className="space-y-space-2 mb-space-4 relative">
-          <label className="text-label text-text-secondary ml-1">Language</label>
-          <button
-            onClick={() => setLangOpen(!langOpen)}
-            className="w-full flex items-center justify-between bg-surface px-space-4 py-space-3 rounded-lg border border-border hover:border-accent transition-colors"
-          >
-            <div className="flex items-center gap-space-3">
-              <span className="text-lg">{selectedLang.flag}</span>
-              <span className="text-body text-on-surface">{selectedLang.label}</span>
-            </div>
-            <ChevronIcon open={langOpen} />
-          </button>
-
-          {langOpen && (
-            <div className="absolute z-50 w-full bg-surface border border-border rounded-lg shadow-xl overflow-hidden mt-1">
-              {LANGUAGES.map((lang) => (
-                <button
-                  key={lang.code}
-                  onClick={() => handleLanguage(lang.code)}
-                  className={`w-full flex items-center gap-space-3 px-space-4 py-space-3 text-left hover:bg-surface-raised transition-colors ${
-                    lang.code === language ? "text-accent" : "text-on-surface"
-                  }`}
-                >
-                  <span className="text-lg">{lang.flag}</span>
-                  <span className="text-body">{lang.label}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </section>
 
         <div className="h-px bg-border w-full mt-auto mb-space-4" />
@@ -206,8 +145,6 @@ export default function Popup() {
   )
 }
 
-// ── Icons ──────────────────────────────────────────────────────────────────────
-
 function SettingsIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-on-surface-variant">
@@ -222,14 +159,6 @@ function YoutubeIcon() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="#FF0000">
       <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8z" />
       <polygon fill="white" points="9.8,15.5 15.8,12 9.8,8.5" />
-    </svg>
-  )
-}
-
-function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`text-text-secondary transition-transform ${open ? "rotate-180" : ""}`}>
-      <polyline points="6 9 12 15 18 9" />
     </svg>
   )
 }

@@ -10,7 +10,6 @@
     "strict": true,
     "skipLibCheck": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
       "@captio/ui": ["./packages/ui/src/index.ts"]
     }
