@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react"
 import "./style.css"
+import {
+  CAPTION_LANGUAGES,
+  DEFAULT_CAPTION_LANGUAGE,
+  DEFAULT_SPOKEN_LANGUAGE,
+  SPOKEN_LANGUAGES,
+  STORAGE_KEYS,
+} from "./lib/languages"
 
 type Status = "idle" | "transcribing" | "ready" | "error"
 
@@ -34,19 +41,37 @@ export default function Popup() {
   const [status, setStatus]         = useState<Status>("idle")
   const [videoTitle, setVideoTitle] = useState("Loading…")
   const [userEmail, setUserEmail]   = useState<string | null>(null)
+  const [spokenLanguage, setSpokenLanguage]   = useState(DEFAULT_SPOKEN_LANGUAGE)
+  const [captionLanguage, setCaptionLanguage] = useState(DEFAULT_CAPTION_LANGUAGE)
 
   useEffect(() => {
     chrome.storage.local.get(["userEmail"], (result) => {
       if (result.userEmail) setUserEmail(result.userEmail)
     })
 
-    // Sync toggle + status with actual background state on open
-    chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
-      if (response) {
-        setEnabled(response.isCapturing)
-        setStatus(response.isCapturing ? "transcribing" : "idle")
+    // Restore the "Spoken language" / "Caption language" picker choices.
+    chrome.storage.local.get(
+      [STORAGE_KEYS.spokenLanguage, STORAGE_KEYS.captionLanguage],
+      (result) => {
+        if (result[STORAGE_KEYS.spokenLanguage]) {
+          setSpokenLanguage(result[STORAGE_KEYS.spokenLanguage])
+        }
+        if (result[STORAGE_KEYS.captionLanguage]) {
+          setCaptionLanguage(result[STORAGE_KEYS.captionLanguage])
+        }
       }
-    })
+    )
+
+    // Sync toggle + status with actual background state on open
+    try {
+      chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
+        if (chrome.runtime.lastError) return
+        if (response) {
+          setEnabled(response.isCapturing)
+          setStatus(response.isCapturing ? "transcribing" : "idle")
+        }
+      })
+    } catch { /* extension context invalidated on hot-reload */ }
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const title = tabs[0]?.title?.replace(" - YouTube", "") ?? "YouTube Video"
@@ -59,13 +84,26 @@ export default function Popup() {
     // then pass the tab ID along with the toggle message.
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
-      chrome.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId }, (response) => {
-        if (response) {
-          setEnabled(response.isCapturing)
-          setStatus(response.isCapturing ? "transcribing" : "idle")
-        }
-      })
+      try {
+        chrome.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId }, (response) => {
+          if (chrome.runtime.lastError) return
+          if (response) {
+            setEnabled(response.isCapturing)
+            setStatus(response.isCapturing ? "transcribing" : "idle")
+          }
+        })
+      } catch { /* extension context invalidated on hot-reload */ }
     })
+  }
+
+  const handleSpokenLanguageChange = (value: string) => {
+    setSpokenLanguage(value)
+    chrome.storage.local.set({ [STORAGE_KEYS.spokenLanguage]: value })
+  }
+
+  const handleCaptionLanguageChange = (value: string) => {
+    setCaptionLanguage(value)
+    chrome.storage.local.set({ [STORAGE_KEYS.captionLanguage]: value })
   }
 
   const openOptions = () => chrome.runtime.openOptionsPage()
@@ -101,6 +139,39 @@ export default function Popup() {
         <section className="flex items-center justify-between py-space-2 mb-space-4">
           <span className="text-body text-on-surface">Enable on this video</span>
           <Toggle active={enabled} onChange={handleToggle} />
+        </section>
+
+        {/* Language pickers */}
+        <section className="grid grid-cols-2 gap-space-3 mb-space-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-label uppercase tracking-wider text-text-secondary">Spoken language</span>
+            <select
+              value={spokenLanguage}
+              onChange={(e) => handleSpokenLanguageChange(e.target.value)}
+              className="bg-surface border border-border rounded-lg px-space-2 py-1.5 text-body-sm text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {SPOKEN_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.flag} {lang.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-label uppercase tracking-wider text-text-secondary">Caption language</span>
+            <select
+              value={captionLanguage}
+              onChange={(e) => handleCaptionLanguageChange(e.target.value)}
+              className="bg-surface border border-border rounded-lg px-space-2 py-1.5 text-body-sm text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {CAPTION_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.flag} {lang.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </section>
 
         {/* Status pill */}

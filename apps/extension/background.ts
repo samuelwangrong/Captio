@@ -10,16 +10,28 @@
  *
  * Message types:
  *   popup    → bg:        TOGGLE_CAPTIONS { tabId }, GET_STATE
- *   bg       → offscreen: START_CAPTURE { streamId, tabId }, STOP_CAPTURE, PAUSE_CAPTURE, RESUME_CAPTURE
- *   offscreen → bg:       TRANSCRIPT { text, tabId, isFinal }, CAPTURE_ERROR { message }, OFFSCREEN_READY
- *   bg       → tab:       CAPTIONS_STARTED, CAPTIONS_STOPPED, TRANSCRIPT { text, isFinal }, CAPTION_ERROR
+ *   bg       → offscreen: START_CAPTURE { streamId, tabId, spokenLanguage, captionLanguage }, STOP_CAPTURE, PAUSE_CAPTURE, RESUME_CAPTURE
+ *   offscreen → bg:       TRANSCRIPT { text, tabId, isFinal }, TRANSLATION { text, tabId }, UTTERANCE_END { tabId }, CAPTURE_ERROR { message }, OFFSCREEN_READY
+ *   bg       → tab:       CAPTIONS_STARTED, CAPTIONS_STOPPED, TRANSCRIPT { text, isFinal }, TRANSLATION { text }, UTTERANCE_END, CAPTION_ERROR
  *   tab      → bg:        STOP_CAPTIONS, PAUSE_CAPTURE, RESUME_CAPTURE
  *
  * MV3 service worker reliability:
  *   Service workers can be killed at any time. capturedTabId is persisted to
  *   chrome.storage.local so it survives restarts. TRANSCRIPT messages include tabId
  *   from the offscreen doc as an extra safety net.
+ *
+ * Offscreen documents cannot access chrome.storage (only chrome.runtime) —
+ * only the background service worker can. So the "Spoken language" / "Caption
+ * language" picker choices (persisted to chrome.storage.local by popup.tsx)
+ * are read here and forwarded to the offscreen doc as part of START_CAPTURE.
  */
+
+import {
+  DEFAULT_CAPTION_LANGUAGE,
+  DEFAULT_SPOKEN_LANGUAGE,
+  STORAGE_KEYS,
+} from "./lib/languages"
+import { resolveTabId as resolveTabIdImpl } from "./lib/tab-resolver"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +40,12 @@ let capturedTabId: number | null = null
 let offscreenReady = false
 
 // Queued start payload, sent once the offscreen doc signals it's ready
-let pendingStart: { streamId: string; tabId: number } | null = null
+let pendingStart: {
+  streamId: string
+  tabId: number
+  spokenLanguage: string
+  captionLanguage: string
+} | null = null
 
 // ─── Offscreen document ───────────────────────────────────────────────────────
 
@@ -77,13 +94,30 @@ async function startCapture(tabId: number) {
 
     await ensureOffscreen()
 
+    // Read the "Spoken language" / "Caption language" picker choices (set in
+    // popup.tsx, persisted to chrome.storage.local). Offscreen documents can't
+    // access chrome.storage, so resolve them here and forward as part of
+    // START_CAPTURE.
+    const { [STORAGE_KEYS.spokenLanguage]: spokenLanguage, [STORAGE_KEYS.captionLanguage]: captionLanguage } =
+      await chrome.storage.local.get({
+        [STORAGE_KEYS.spokenLanguage]: DEFAULT_SPOKEN_LANGUAGE,
+        [STORAGE_KEYS.captionLanguage]: DEFAULT_CAPTION_LANGUAGE,
+      })
+
     // Pass tabId alongside streamId so the offscreen doc can embed it in every
     // TRANSCRIPT message — this means transcripts reach the content script even
     // if this service worker is restarted and loses in-memory capturedTabId.
     if (offscreenReady) {
-      chrome.runtime.sendMessage({ target: "offscreen", type: "START_CAPTURE", streamId, tabId })
+      chrome.runtime.sendMessage({
+        target: "offscreen",
+        type: "START_CAPTURE",
+        streamId,
+        tabId,
+        spokenLanguage,
+        captionLanguage,
+      })
     } else {
-      pendingStart = { streamId, tabId }
+      pendingStart = { streamId, tabId, spokenLanguage, captionLanguage }
     }
 
     isCapturing = true
@@ -117,15 +151,20 @@ async function cleanup() {
 // ─── Resolve the tab to forward transcripts to ────────────────────────────────
 // Prefer in-memory capturedTabId (fast), fall back to storage (if SW was restarted),
 // fall back to msg.tabId forwarded from the offscreen doc (most reliable).
+// The actual policy lives in lib/tab-resolver.ts so it can be unit tested
+// without chrome API mocks.
 
 async function resolveTabId(msgTabId?: number | null): Promise<number | null> {
-  if (capturedTabId) return capturedTabId
-  const stored = await chrome.storage.local.get("capturedTabId")
-  if (stored.capturedTabId) {
-    capturedTabId = stored.capturedTabId // restore in-memory state
-    return capturedTabId
-  }
-  return msgTabId ?? null
+  return resolveTabIdImpl(msgTabId, {
+    getInMemoryTabId: () => capturedTabId,
+    setInMemoryTabId: (tabId) => {
+      capturedTabId = tabId
+    },
+    getStoredTabId: async () => {
+      const stored = await chrome.storage.local.get("capturedTabId")
+      return stored.capturedTabId ?? null
+    },
+  })
 }
 
 // ─── Message router ───────────────────────────────────────────────────────────
@@ -164,6 +203,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         type: "START_CAPTURE",
         streamId: pendingStart.streamId,
         tabId: pendingStart.tabId,
+        spokenLanguage: pendingStart.spokenLanguage,
+        captionLanguage: pendingStart.captionLanguage,
       })
       pendingStart = null
     }
@@ -179,6 +220,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           isFinal: msg.isFinal,
         })
       }
+    })
+  }
+
+  if (msg.type === "TRANSLATION") {
+    resolveTabId(msg.tabId).then((tabId) => {
+      if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRANSLATION", text: msg.text, isFinal: !!msg.isFinal })
+    })
+  }
+
+  if (msg.type === "UTTERANCE_END") {
+    resolveTabId(msg.tabId).then((tabId) => {
+      if (tabId) chrome.tabs.sendMessage(tabId, { type: "UTTERANCE_END" })
     })
   }
 

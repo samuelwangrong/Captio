@@ -1,13 +1,22 @@
 /**
  * tabs/offscreen.tsx — Plasmo tab page used as an offscreen document.
  *
- * Audio pipeline:
- *   getUserMedia (tabCapture stream)
- *     → AudioContext (16 kHz, downmixed to mono)
- *       → ScriptProcessorNode
- *           onaudioprocess: copies input → output  (keeps tab audible — fixes muting)
- *                           converts Float32 → Int16 and sends to WebSocket
- *         → AudioContext.destination (speakers)
+ * Audio pipeline (two separate AudioContexts to avoid muffling):
+ *
+ *   passCtx  (native sample rate — 44.1 / 48 kHz):
+ *     stream → MediaStreamSource → destination  (speakers, full quality)
+ *
+ *   captureCtx (16 kHz — Deepgram linear16 requirement):
+ *     stream → MediaStreamSource → ScriptProcessorNode → GainNode(0) → destination
+ *                                        │
+ *                                   onaudioprocess: Float32→Int16 → WebSocket
+ *
+ *   Why two contexts?
+ *   A single 16 kHz AudioContext for both capture and playback caused the
+ *   muffling bug — Chrome downsampled speaker output to 16 kHz, cutting all
+ *   audio above 8 kHz. Separating them keeps speakers at native quality.
+ *   The silent GainNode(0) is required: ScriptProcessorNode only fires
+ *   onaudioprocess when it is part of an active graph connected to a destination.
  *
  * Why ScriptProcessorNode instead of AudioWorkletNode:
  *   Chrome extension offscreen documents have a CSP/context restriction that
@@ -22,20 +31,17 @@
  */
 
 import { useEffect, useRef } from "react"
+import { float32ToInt16 } from "../lib/audio"
+import {
+  DEFAULT_CAPTION_LANGUAGE,
+  DEFAULT_SPOKEN_LANGUAGE,
+  getDeepLTargetLang,
+} from "../lib/languages"
 
 const SERVER_URL = "ws://localhost:3001/transcribe"
 const KEEPALIVE_INTERVAL_MS = 5000
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function float32ToInt16(float32: Float32Array): ArrayBuffer {
-  const int16 = new Int16Array(float32.length)
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]))
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-  }
-  return int16.buffer
-}
 
 /**
  * Safely send a message to the service worker.
@@ -53,20 +59,22 @@ function trySend(msg: object) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OffscreenPage() {
-  const wsRef        = useRef<WebSocket | null>(null)
-  const audioCtxRef  = useRef<AudioContext | null>(null)
-  const processorRef = useRef<ScriptProcessorNode | null>(null)
-  const keepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const wsRef         = useRef<WebSocket | null>(null)
+  const passCtxRef    = useRef<AudioContext | null>(null)  // native rate → speakers
+  const captureCtxRef = useRef<AudioContext | null>(null)  // 16 kHz → Deepgram
+  const processorRef  = useRef<ScriptProcessorNode | null>(null)
+  const keepAliveRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const isPausedRef   = useRef(false)
   // tabId from START_CAPTURE is embedded in every TRANSCRIPT message so
   // the background can deliver it even after a service-worker restart.
-  const tabIdRef     = useRef<number | null>(null)
+  const tabIdRef      = useRef<number | null>(null)
 
   useEffect(() => {
     trySend({ type: "OFFSCREEN_READY" })
 
     const onMessage = (msg: any) => {
       if (msg.target !== "offscreen") return
-      if (msg.type === "START_CAPTURE")  startCapture(msg.streamId, msg.tabId)
+      if (msg.type === "START_CAPTURE")  startCapture(msg.streamId, msg.tabId, msg.spokenLanguage, msg.captionLanguage)
       if (msg.type === "STOP_CAPTURE")   stopCapture()
       if (msg.type === "PAUSE_CAPTURE")  pauseCapture()
       if (msg.type === "RESUME_CAPTURE") resumeCapture()
@@ -81,9 +89,20 @@ export default function OffscreenPage() {
 
   // ─── Capture ────────────────────────────────────────────────────────────────
 
-  async function startCapture(streamId: string, tabId?: number) {
+  async function startCapture(streamId: string, tabId?: number, spokenLanguage?: string, captionLanguage?: string) {
     tabIdRef.current = tabId ?? null
+    isPausedRef.current = false
     try {
+      // 0. Resolve language picker choices into Deepgram/DeepL query params.
+      const resolvedSpokenLanguage = spokenLanguage ?? DEFAULT_SPOKEN_LANGUAGE
+      const resolvedCaptionLanguage = captionLanguage ?? DEFAULT_CAPTION_LANGUAGE
+      const targetLang = getDeepLTargetLang(resolvedSpokenLanguage, resolvedCaptionLanguage)
+      const translationEnabled = !!targetLang
+
+      const wsUrl = new URL(SERVER_URL)
+      wsUrl.searchParams.set("language", resolvedSpokenLanguage)
+      if (targetLang) wsUrl.searchParams.set("targetLang", targetLang)
+
       // 1. Get the tab's MediaStream via the tabCapture stream ID.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -96,55 +115,53 @@ export default function OffscreenPage() {
         video: false,
       })
 
-      // 2. AudioContext at 16 kHz (Deepgram linear16 requirement).
-      //    Chrome resamples the tab's native sample rate automatically.
-      const ctx = new AudioContext({ sampleRate: 16000 })
-      audioCtxRef.current = ctx
+      // 2a. Passthrough context at the browser's native sample rate.
+      //     This is what the user hears — must stay full quality (44.1/48 kHz).
+      const passCtx = new AudioContext()
+      passCtxRef.current = passCtx
+      passCtx.createMediaStreamSource(stream).connect(passCtx.destination)
 
-      const source = ctx.createMediaStreamSource(stream)
+      // 2b. Capture context at 16 kHz for Deepgram (linear16).
+      //     Chrome resamples the stream from native → 16 kHz automatically.
+      const captureCtx = new AudioContext({ sampleRate: 16000 })
+      captureCtxRef.current = captureCtx
 
-      // 3. ScriptProcessorNode: 4096-sample chunks (256ms at 16kHz).
-      //    1 input channel (Chrome downmixes stereo → mono for us).
-      //    1 output channel.
-      const processor = ctx.createScriptProcessor(4096, 1, 1)
+      const captureSource = captureCtx.createMediaStreamSource(stream)
+
+      // 3. ScriptProcessorNode: 256-sample chunks (16 ms at 16 kHz).
+      const processor = captureCtx.createScriptProcessor(256, 1, 1)
       processorRef.current = processor
 
-      // 4. Wire the audio graph IMMEDIATELY so the tab never goes silent:
-      //      source → processor → destination
-      //
-      //    KEY FIX: the processor copies input → output in onaudioprocess.
-      //    Without this copy, ScriptProcessorNode outputs silence even when
-      //    connected to the destination — that was the muting bug.
-      source.connect(processor)
-      processor.connect(ctx.destination)
+      // 4. Wire capture graph: source → processor → silentGain → destination.
+      //    GainNode at 0 is required — ScriptProcessorNode only fires
+      //    onaudioprocess when the node is connected into an active graph.
+      //    Gain 0 ensures the 16 kHz audio never reaches the speakers.
+      const silentGain = captureCtx.createGain()
+      silentGain.gain.value = 0
+      captureSource.connect(processor)
+      processor.connect(silentGain)
+      silentGain.connect(captureCtx.destination)
 
-      // 5. Open WebSocket before setting up onaudioprocess so wsRef is
-      //    available for the send check. Passthrough works immediately
-      //    (keeps tab audible during the WebSocket connection handshake).
-      const ws = new WebSocket(SERVER_URL)
+      // 5. Open WebSocket before onaudioprocess so wsRef is ready.
+      const ws = new WebSocket(wsUrl.toString())
       wsRef.current = ws
 
-      // 6. onaudioprocess fires ~every 256ms.
-      //    - Copies input → output (passthrough; tab stays audible)
-      //    - Forwards Int16 PCM to Deepgram once the WebSocket is open
+      // 6. onaudioprocess: forward Int16 PCM to Deepgram when not paused.
+      //    Speaker passthrough is handled entirely by passCtx (step 2a).
       processor.onaudioprocess = (e) => {
-        const input = e.inputBuffer.getChannelData(0)
-        // Passthrough — without this the tab goes silent
-        e.outputBuffer.getChannelData(0).set(input)
-        // Forward to Deepgram
+        if (isPausedRef.current) return
         const ws = wsRef.current
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(float32ToInt16(input))
+          ws.send(float32ToInt16(e.inputBuffer.getChannelData(0)))
         }
       }
 
       ws.onmessage = ({ data }) => {
         try {
           const event = JSON.parse(data)
-          if (event.type === "Results") {
-            // Send ALL Results (interim + final) so captions update in real time.
-            // With continuous speech, is_final only fires during pauses — waiting
-            // for it means long stretches of no captions.
+          if (event.type === "Results" && !translationEnabled) {
+            // Translation mode suppresses raw results entirely — only the
+            // translated text (from the Translation event below) is shown.
             const text = event.channel?.alternatives?.[0]?.transcript?.trim()
             if (text) {
               trySend({
@@ -154,6 +171,17 @@ export default function OffscreenPage() {
                 isFinal: !!event.is_final,
               })
             }
+          }
+          if (event.type === "Translation") {
+            const text = event.translated?.trim()
+            if (text) {
+              // TRANSLATION (not TRANSCRIPT) triggers a roll-up in the content
+              // script: previous live row → committed (dim top), new text → live.
+              trySend({ type: "TRANSLATION", text, tabId: tabIdRef.current, isFinal: !!event.isFinal })
+            }
+          }
+          if (event.type === "UtteranceEnd") {
+            trySend({ type: "UTTERANCE_END", tabId: tabIdRef.current })
           }
           if (event.type === "Error") {
             console.error("[captio offscreen] Deepgram error:", event)
@@ -166,6 +194,16 @@ export default function OffscreenPage() {
         trySend({ type: "CAPTURE_ERROR", message: "WebSocket connection failed. Is the server running?" })
         stopCapture()
       }
+
+      ws.onclose = (event) => {
+        // Only report an error if we didn't call stopCapture ourselves.
+        // wsRef is nulled in stopCapture() before the close fires, so if it's
+        // still pointing at this socket the close was unexpected.
+        if (wsRef.current === ws) {
+          trySend({ type: "CAPTURE_ERROR", message: "Connection lost — try restarting captions" })
+          stopCapture()
+        }
+      }
     } catch (err: any) {
       console.error("[captio offscreen] startCapture error:", err)
       trySend({ type: "CAPTURE_ERROR", message: err.message ?? String(err) })
@@ -175,15 +213,9 @@ export default function OffscreenPage() {
   // ─── Pause / Resume ─────────────────────────────────────────────────────────
 
   function pauseCapture() {
-    // Switch onaudioprocess to passthrough-only (no WebSocket send).
-    // Tab audio keeps playing; Deepgram gets silence/keepalive.
-    const processor = processorRef.current
-    if (processor) {
-      processor.onaudioprocess = (e) => {
-        e.outputBuffer.getChannelData(0).set(e.inputBuffer.getChannelData(0))
-      }
-    }
-    // Keep the WebSocket alive so Deepgram doesn't time out
+    // Stop sending audio to Deepgram. Speaker passthrough (passCtx) is
+    // unaffected — the tab keeps playing at full quality while paused.
+    isPausedRef.current = true
     if (!keepAliveRef.current) {
       keepAliveRef.current = setInterval(() => {
         const ws = wsRef.current
@@ -193,15 +225,7 @@ export default function OffscreenPage() {
   }
 
   function resumeCapture() {
-    const processor = processorRef.current
-    if (processor) {
-      processor.onaudioprocess = (e) => {
-        const input = e.inputBuffer.getChannelData(0)
-        e.outputBuffer.getChannelData(0).set(input)
-        const ws = wsRef.current
-        if (ws?.readyState === WebSocket.OPEN) ws.send(float32ToInt16(input))
-      }
-    }
+    isPausedRef.current = false
     if (keepAliveRef.current) {
       clearInterval(keepAliveRef.current)
       keepAliveRef.current = null
@@ -216,13 +240,14 @@ export default function OffscreenPage() {
     processorRef.current = null
     const ws = wsRef.current
     if (ws?.readyState === WebSocket.OPEN) {
-      // Tell Deepgram to flush any in-progress transcript before closing
       ws.send(JSON.stringify({ type: "CloseStream" }))
       setTimeout(() => ws.close(), 500)
     }
     wsRef.current = null
-    audioCtxRef.current?.close()
-    audioCtxRef.current = null
+    passCtxRef.current?.close()
+    passCtxRef.current = null
+    captureCtxRef.current?.close()
+    captureCtxRef.current = null
   }
 
   return null
