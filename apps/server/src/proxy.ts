@@ -101,7 +101,7 @@ export interface DeepgramProxyOptions {
 // punctuate=true     — adds commas, periods, question marks
 // smart_format=true  — formats numbers, currency, dates ("twenty dollars" → "$20")
 // interim_results=true — send partial transcripts as words arrive (faster perceived latency)
-// endpointing=300    — trigger a final transcript after 300ms of silence
+// endpointing=100    — trigger a final transcript after 100ms of silence
 // utterance_end_ms=1000 — emit UtteranceEnd event after 1s of silence; clears caption box
 // vad_events=true    — emit SpeechStarted/UtteranceEnd events (lets us pause sending on silence)
 // language            — "en" by default. The "Spoken language" picker always sends a

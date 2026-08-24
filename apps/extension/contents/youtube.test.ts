@@ -51,22 +51,27 @@ describe("contents/youtube.ts", () => {
     expect(document.getElementById("captio-styles")).toBeTruthy()
   })
 
-  it("shows TRANSCRIPT text and auto-hides it after 4 seconds", async () => {
+  it("shows TRANSCRIPT text and clears the rows 1.5s after UTTERANCE_END", async () => {
     const bus = createMessageBus()
     await loadContentScript(bus)
 
+    dispatchToContentScript(bus, { type: "CAPTIONS_STARTED" })
+
     // Switch to fake timers only after init() has settled (it relies on a
-    // real setTimeout(0) inside loadContentScript), so the 4s auto-hide
-    // timer set by showCaption below is the one we control.
+    // real setTimeout(0) inside loadContentScript), so the clearRows() timer
+    // set by UTTERANCE_END below is the one we control.
     vi.useFakeTimers()
     dispatchToContentScript(bus, { type: "TRANSCRIPT", text: "hello world", isFinal: true })
 
     const caption = document.getElementById("captio-caption")!
     expect(caption.textContent).toBe("hello world")
-    expect(caption.classList.contains("captio-visible")).toBe(true)
+    expect(caption.classList.contains("captio-active")).toBe(true)
 
-    vi.advanceTimersByTime(4000)
-    expect(caption.classList.contains("captio-visible")).toBe(false)
+    dispatchToContentScript(bus, { type: "UTTERANCE_END" })
+    vi.advanceTimersByTime(1500)
+    expect(caption.textContent).toBe("")
+    // The box itself stays up until CAPTIONS_STOPPED — only the text clears.
+    expect(caption.classList.contains("captio-active")).toBe(true)
   })
 
   it("sends PAUSE_CAPTURE / RESUME_CAPTURE on video pause/play only while captions are active", async () => {
@@ -99,10 +104,10 @@ describe("contents/youtube.ts", () => {
     dispatchToContentScript(bus, { type: "TRANSCRIPT", text: "still talking", isFinal: false })
 
     const caption = document.getElementById("captio-caption")!
-    expect(caption.classList.contains("captio-visible")).toBe(true)
+    expect(caption.classList.contains("captio-active")).toBe(true)
 
     dispatchToContentScript(bus, { type: "CAPTIONS_STOPPED" })
-    expect(caption.classList.contains("captio-visible")).toBe(false)
+    expect(caption.classList.contains("captio-active")).toBe(false)
 
     const video = document.querySelector("video")!
     video.dispatchEvent(new Event("pause"))
@@ -119,7 +124,7 @@ describe("contents/youtube.ts", () => {
 
     const caption = document.getElementById("captio-caption")!
     expect(caption.textContent).toBe("Connection error — try restarting captions")
-    expect(caption.classList.contains("captio-visible")).toBe(true)
+    expect(caption.classList.contains("captio-active")).toBe(true)
 
     // captionsActive is now false — pause should no longer message background.
     sendMessage.mockClear()
@@ -141,7 +146,7 @@ describe("contents/youtube.ts", () => {
     expect(sendMessage).toHaveBeenCalledWith({ type: "STOP_CAPTIONS" })
 
     const caption = document.getElementById("captio-caption")!
-    expect(caption.classList.contains("captio-visible")).toBe(false)
+    expect(caption.classList.contains("captio-active")).toBe(false)
   })
 
   it("does not send STOP_CAPTIONS when yt-navigate-finish fires for the same video", async () => {

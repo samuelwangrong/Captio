@@ -96,13 +96,25 @@ describe("tabs/offscreen.tsx", () => {
       video: false,
     })
 
-    expect(createdAudioContexts).toHaveLength(1)
-    const ctx = createdAudioContexts[0]
+    // Two AudioContexts are created: passCtx (native rate, passthrough to
+    // speakers) followed by captureCtx (16kHz, the Deepgram capture graph).
+    expect(createdAudioContexts).toHaveLength(2)
+
+    const passCtx = createdAudioContexts[0]
+    expect(passCtx.sampleRate).not.toBe(16000)
+    expect(passCtx.lastSource!.connect).toHaveBeenCalledWith(passCtx.destination)
+
+    const ctx = createdAudioContexts[1]
     expect(ctx.sampleRate).toBe(16000)
 
     const processor = ctx.lastProcessor!
+    const silentGain = ctx.lastGain!
     expect(ctx.lastSource!.connect).toHaveBeenCalledWith(processor)
-    expect(processor.connect).toHaveBeenCalledWith(ctx.destination)
+    // processor -> silentGain(0) -> destination, so the 16kHz capture graph
+    // never reaches the speakers (only passCtx does).
+    expect(processor.connect).toHaveBeenCalledWith(silentGain)
+    expect(silentGain.gain.value).toBe(0)
+    expect(silentGain.connect).toHaveBeenCalledWith(ctx.destination)
 
     expect(createdWebSockets).toHaveLength(1)
     // Defaults: Spoken language "en", Caption language "EN-US" — same
@@ -110,23 +122,25 @@ describe("tabs/offscreen.tsx", () => {
     expect(createdWebSockets[0].url).toBe(`${SERVER_URL}?language=en`)
   })
 
-  it("processor passthrough always copies input to output, and forwards Int16 audio only once the socket is open", async () => {
+  it("the capture processor forwards Int16 audio to Deepgram only once the socket is open", async () => {
     await loadOffscreenPage(bus)
     await startCapture(bus)
 
-    const processor = createdAudioContexts[0].lastProcessor!
+    // Speaker passthrough is handled entirely by the separate passCtx graph
+    // (verified in the wiring test above) — it doesn't depend on the
+    // WebSocket at all. This capture processor's only job is forwarding
+    // Int16 PCM to Deepgram once the socket is open.
+    const processor = createdAudioContexts[1].lastProcessor!
     const ws = createdWebSockets[0]
     const input = new Float32Array([0.1, -0.2, 0.3, -0.4])
 
-    // Before the socket opens: tab stays audible (passthrough), nothing sent.
-    let output = processor.process(input)
-    expect(output).toEqual(input)
+    // Before the socket opens: nothing is sent.
+    processor.process(input)
     expect(ws.sent).toHaveLength(0)
 
-    // After the socket opens: passthrough continues, audio is also forwarded.
+    // After the socket opens: audio is forwarded.
     ws.simulateOpen()
-    output = processor.process(input)
-    expect(output).toEqual(input)
+    processor.process(input)
     expect(ws.sent).toHaveLength(1)
     expect(ws.sent[0]).toBeInstanceOf(ArrayBuffer)
   })
@@ -197,7 +211,8 @@ describe("tabs/offscreen.tsx", () => {
     await loadOffscreenPage(bus)
     await startCapture(bus, 5)
 
-    const ctx = createdAudioContexts[0]
+    const passCtx = createdAudioContexts[0]
+    const ctx = createdAudioContexts[1]
     const processor = ctx.lastProcessor!
     const ws = createdWebSockets[0]
     onBackgroundMessage.mockClear()
@@ -212,7 +227,9 @@ describe("tabs/offscreen.tsx", () => {
       expect.any(Function)
     )
     expect(processor.disconnect).toHaveBeenCalled()
+    // stopCapture() tears down both AudioContexts, not just the capture one.
     expect(ctx.close).toHaveBeenCalled()
+    expect(passCtx.close).toHaveBeenCalled()
   })
 
   it("PAUSE_CAPTURE stops audio forwarding and sends periodic KeepAlive while paused; RESUME_CAPTURE restores forwarding", async () => {
@@ -221,7 +238,7 @@ describe("tabs/offscreen.tsx", () => {
 
     const ws = createdWebSockets[0]
     ws.simulateOpen()
-    const processor = createdAudioContexts[0].lastProcessor!
+    const processor = createdAudioContexts[1].lastProcessor!
     const input = new Float32Array([0.5, -0.5])
     const listener = getOffscreenListener(bus)
 
@@ -231,9 +248,9 @@ describe("tabs/offscreen.tsx", () => {
       listener({ target: "offscreen", type: "PAUSE_CAPTURE" }, {}, () => {})
     })
 
-    // Passthrough still works while paused, but no audio is forwarded.
-    let output = processor.process(input)
-    expect(output).toEqual(input)
+    // Speaker passthrough (via the separate passCtx) is unaffected by pause —
+    // only forwarding to Deepgram through this capture processor stops.
+    processor.process(input)
     expect(ws.sent).toHaveLength(0)
 
     // KeepAlive fires every 5s while paused (so Deepgram doesn't time out).
@@ -247,8 +264,7 @@ describe("tabs/offscreen.tsx", () => {
     })
 
     // Forwarding resumes...
-    output = processor.process(input)
-    expect(output).toEqual(input)
+    processor.process(input)
     expect(ws.sent.filter((d) => d instanceof ArrayBuffer)).toHaveLength(1)
 
     // ...and the KeepAlive interval has been cleared.
@@ -262,7 +278,8 @@ describe("tabs/offscreen.tsx", () => {
     await loadOffscreenPage(bus)
     await startCapture(bus, 5)
 
-    const ctx = createdAudioContexts[0]
+    const passCtx = createdAudioContexts[0]
+    const ctx = createdAudioContexts[1]
     const processor = ctx.lastProcessor!
     const ws = createdWebSockets[0]
     ws.simulateOpen()
@@ -276,7 +293,9 @@ describe("tabs/offscreen.tsx", () => {
 
     expect(processor.disconnect).toHaveBeenCalled()
     expect(ws.sentJson()).toEqual([{ type: "CloseStream" }])
+    // Both AudioContexts (passthrough and capture) close immediately.
     expect(ctx.close).toHaveBeenCalled()
+    expect(passCtx.close).toHaveBeenCalled()
     expect(ws.readyState).not.toBe(FakeWebSocket.CLOSED)
 
     act(() => {
@@ -347,11 +366,15 @@ describe("tabs/offscreen.tsx", () => {
           translated: "Hola mundo",
           sourceLang: "EN",
           targetLang: "ES",
+          isFinal: true,
         })
       })
 
+      // Translation events forward as TRANSLATION (not TRANSCRIPT) — the
+      // content script uses the distinct type to roll up the previous live
+      // row into a committed one before showing the new translated text.
       expect(onBackgroundMessage).toHaveBeenCalledWith(
-        { type: "TRANSCRIPT", text: "Hola mundo", tabId: 5, isFinal: true },
+        { type: "TRANSLATION", text: "Hola mundo", tabId: 5, isFinal: true },
         expect.any(Object),
         expect.any(Function)
       )

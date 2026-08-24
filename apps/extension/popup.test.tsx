@@ -24,6 +24,9 @@ async function loadPopup(options: LoadPopupOptions = {}) {
 
   const defaultSendMessage = (message: any, callback?: (response?: any) => void) => {
     if (message.type === "GET_STATE") callback?.({ isCapturing: false })
+    // No live Supabase session by default — popup.tsx falls back to the
+    // cached `userEmail` in chrome.storage.local (set via `options.storage`).
+    if (message.type === "GET_AUTH_SESSION") callback?.({ session: null })
   }
   chromeMock.runtime.sendMessage = vi.fn(options.sendMessageImpl ?? defaultSendMessage) as any
 
@@ -49,15 +52,15 @@ describe("popup.tsx", () => {
     expect(screen.getByText("Some Cool Video")).toBeInTheDocument()
   })
 
-  it("shows a sign-in link when no user email is stored", async () => {
+  it("shows a sign-in button when no user email is stored", async () => {
     await loadPopup({})
-    expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument()
   })
 
   it("shows the account email when one is stored in chrome.storage.local", async () => {
     await loadPopup({ storage: { userEmail: "sam@example.com" } })
     expect(await screen.findByText("sam@example.com")).toBeInTheDocument()
-    expect(screen.queryByRole("link", { name: /sign in/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument()
   })
 
   it("reflects an active capture from the background's GET_STATE response", async () => {

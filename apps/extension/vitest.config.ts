@@ -7,6 +7,14 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // lib/supabase.ts creates its client at module load time, so any test that
+    // transitively imports it (background.ts, offscreen.tsx, popup.tsx all pull
+    // in lib/auth.ts -> lib/supabase.ts) needs these set before import — a real
+    // .env is not loaded under vitest.
+    env: {
+      PLASMO_PUBLIC_SUPABASE_URL: "https://test.supabase.co",
+      PLASMO_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
+    },
     setupFiles: ["./test/setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".plasmo", "build", "test/e2e/**"],

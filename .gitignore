@@ -10,3 +10,10 @@ dist
 .env.production.local
 .DS_Store
 *.log
+*.tsbuildinfo
+test-results/
+playwright-report/
+
+# This is a pnpm workspace — npm/yarn lockfiles are accidental.
+package-lock.json
+yarn.lock

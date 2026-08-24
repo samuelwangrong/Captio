@@ -210,6 +210,7 @@ describe("/transcribe websocket proxy", () => {
       translated: "Hola mundo",
       sourceLang: "EN",
       targetLang: "ES",
+      isFinal: true,
     })
 
     client.close()

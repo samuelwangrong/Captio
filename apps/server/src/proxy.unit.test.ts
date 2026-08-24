@@ -32,7 +32,7 @@ describe("buildDeepgramUrl", () => {
     expect(params.get("punctuate")).toBe("true")
     expect(params.get("smart_format")).toBe("true")
     expect(params.get("interim_results")).toBe("true")
-    expect(params.get("endpointing")).toBe("300")
+    expect(params.get("endpointing")).toBe("100")
     expect(params.get("utterance_end_ms")).toBe("1000")
     expect(params.get("vad_events")).toBe("true")
   })
@@ -303,6 +303,7 @@ describe("createDeepgramProxy — translation (Caption language picker)", () => 
         translated: "Hola mundo",
         sourceLang: "EN",
         targetLang: "ES",
+        isFinal: true,
       })
     })
 
@@ -338,14 +339,21 @@ describe("createDeepgramProxy — translation (Caption language picker)", () => 
     expect(client.sentJson()).not.toContainEqual(expect.objectContaining({ type: "Translation" }))
   })
 
-  it("does not send a Translation message or throw when translation fails", async () => {
+  it("falls back to sending the original text as the translation, without throwing, when translation fails", async () => {
     const translateFn = vi.fn().mockResolvedValue(null)
     wire({ targetLanguage: "ES", translateFn })
     dg.open()
 
     expect(() => dg.message(finalResult("hello world"))).not.toThrow()
-    await vi.waitFor(() => expect(translateFn).toHaveBeenCalled())
-
-    expect(client.sentJson()).not.toContainEqual(expect.objectContaining({ type: "Translation" }))
+    await vi.waitFor(() => {
+      expect(client.sentJson()).toContainEqual({
+        type: "Translation",
+        original: "hello world",
+        translated: "hello world",
+        sourceLang: undefined,
+        targetLang: "ES",
+        isFinal: true,
+      })
+    })
   })
 })
