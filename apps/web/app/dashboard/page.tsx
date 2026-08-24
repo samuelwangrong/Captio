@@ -26,7 +26,7 @@ export default async function DashboardPage() {
         Signed in as <span className="text-primary">{user.email}</span>
       </p>
 
-      <div className="grid grid-cols-2 gap-space-4 mb-space-8">
+      <div className="grid grid-cols-3 gap-space-4 mb-space-8">
         <Link
           href="/dashboard/transcripts"
           className="p-space-4 bg-surface border border-border rounded-md hover:border-accent transition-colors"
@@ -40,6 +40,13 @@ export default async function DashboardPage() {
         >
           <p className="text-headline-md font-semibold text-primary">{vocabCount ?? 0}</p>
           <p className="text-body-sm text-text-secondary">Saved words</p>
+        </Link>
+        <Link
+          href="/dashboard/explore"
+          className="p-space-4 bg-surface border border-border rounded-md hover:border-accent transition-colors"
+        >
+          <p className="text-headline-md font-semibold text-primary">Explore</p>
+          <p className="text-body-sm text-text-secondary">Trending by region</p>
         </Link>
       </div>
 

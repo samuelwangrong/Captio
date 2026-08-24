@@ -22,6 +22,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               Vocabulary
             </Link>
+            <Link
+              href="/dashboard/explore"
+              className="text-body-sm text-on-surface hover:text-primary transition-colors"
+            >
+              Explore
+            </Link>
           </nav>
         </div>
       </header>
