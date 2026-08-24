@@ -137,4 +137,72 @@ describe("server entrypoint (src/index.ts)", () => {
     expect(stderr).not.toMatch(/DEEPGRAM_API_KEY is not set/)
     expect(stdout).toContain("Captio server listening")
   })
+
+  describe("graceful shutdown (SIGTERM)", () => {
+    // Own process — SIGTERM ends its life, so it can't share the outer
+    // beforeAll's `child` without breaking every test that runs after it.
+    let shutdownChild: ChildProcessByStdio<null, Readable, Readable>
+    let shutdownPort: number
+
+    beforeAll(async () => {
+      shutdownPort = await getFreePort()
+      shutdownChild = spawn(process.execPath, [resolveTsxCli(), "src/index.ts"], {
+        cwd: SERVER_ROOT,
+        env: { ...process.env, HOST: "127.0.0.1", PORT: String(shutdownPort), DEEPGRAM_API_KEY: "test-key-e2e" },
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      await waitForHealth(shutdownPort)
+    }, 30_000)
+
+    afterAll(() => {
+      shutdownChild?.kill()
+    })
+
+    // Windows has no POSIX signals — Node's child.kill('SIGTERM') on Windows
+    // calls TerminateProcess() unconditionally (confirmed empirically: a
+    // process.on('SIGTERM') handler never runs, the process just dies with
+    // code: null, signal: 'SIGTERM', same as if it had no handler at all).
+    // The shutdown handler in index.ts is correct for its real target (every
+    // deploy platform — Docker/Fly.io/Railway/etc. — runs Linux containers
+    // with real signal delivery), but this specific behavior is only
+    // verifiable on a POSIX platform. CI (ubuntu-latest) is where this
+    // actually gets exercised.
+    it.skipIf(process.platform === "win32")(
+      "closes open /transcribe connections and exits cleanly instead of being killed outright",
+      async () => {
+        let debugOut = ""
+        let debugErr = ""
+        shutdownChild.stdout.on("data", (c) => (debugOut += c.toString()))
+        shutdownChild.stderr.on("data", (c) => (debugErr += c.toString()))
+
+        const client = new WebSocket(`ws://127.0.0.1:${shutdownPort}/transcribe`)
+        await new Promise<void>((resolve, reject) => {
+          client.on("open", () => resolve())
+          client.on("error", reject)
+        })
+
+        const clientClosed = new Promise<void>((resolve) => client.on("close", () => resolve()))
+        const processExited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
+          shutdownChild.on("exit", (code, signal) => resolve({ code, signal }))
+        )
+
+        shutdownChild.kill("SIGTERM")
+
+        // Both must happen within a normal deploy's grace period (typically
+        // 10-30s) — a hung shutdown defeats the whole point, since the platform
+        // would SIGKILL it anyway once that window expires.
+        await Promise.all([
+          clientClosed,
+          Promise.race([
+            processExited,
+            new Promise((_, reject) => setTimeout(() => reject(new Error("process did not exit within 5s")), 5_000)),
+          ]),
+        ])
+
+        const result = await processExited
+        expect(result, `stdout: ${debugOut}\nstderr: ${debugErr}`).toEqual({ code: 0, signal: null })
+      },
+      10_000
+    )
+  })
 })
