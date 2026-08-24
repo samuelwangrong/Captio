@@ -258,6 +258,16 @@ export function createChromeMock(options: MockChromeOptions) {
         }
         return Promise.resolve(tabs)
       },
+      // chrome.tabs.get(tabId) — MV3 promise-based form, used by background.ts's
+      // startCapture() to read the video's title/url for transcript saving.
+      get(_targetTabId: number, callback?: (tab: any) => void) {
+        const tab = { id: tabId, url: tabUrl, title: tabTitle }
+        if (callback) {
+          callback(tab)
+          return undefined
+        }
+        return Promise.resolve(tab)
+      },
       sendMessage(targetTabId: number, message: any, callback?: (response?: any) => void) {
         const sender: MessageSender = { id: "test-extension-id" }
         let responded = false
