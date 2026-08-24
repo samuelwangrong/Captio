@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import fastifyWebsocket from '@fastify/websocket'
 import { createDeepgramProxy, type DeepgramProxyOptions } from './proxy.js'
-import { verifySupabaseToken } from './auth.js'
+import { isAuthConfigured, verifySupabaseToken, type VerifyTokenOptions } from './auth.js'
 
 export interface BuildServerOptions {
   /**
@@ -12,6 +12,8 @@ export interface BuildServerOptions {
   proxyOptions?: DeepgramProxyOptions
   /** Disable Fastify's request logging (useful for quiet test output). */
   logger?: boolean
+  /** Injectable Supabase client for tests — see auth.ts's VerifyTokenOptions.client. */
+  authClient?: VerifyTokenOptions['client']
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -32,12 +34,13 @@ export async function buildServer(options: BuildServerOptions = {}) {
   //   ?targetLang=<deepl code>    — "Caption language". Omitted when it's the same
   //                                 language as the Spoken language (no translation).
   fastify.register(async (instance) => {
-    instance.get('/transcribe', { websocket: true }, (socket, req) => {
+    instance.get('/transcribe', { websocket: true }, async (socket, req) => {
       const query = req.query as { language?: string; targetLang?: string; token?: string }
 
-      // Require a valid Supabase JWT when the secret is configured.
-      if (process.env.SUPABASE_JWT_SECRET) {
-        const user = query.token ? verifySupabaseToken(query.token) : null
+      // Require a valid Supabase access token when auth is configured (or a
+      // test client is injected).
+      if (options.authClient || isAuthConfigured()) {
+        const user = query.token ? await verifySupabaseToken(query.token, { client: options.authClient }) : null
         if (!user) {
           socket.close(4001, 'Authentication required')
           return

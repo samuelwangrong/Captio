@@ -215,4 +215,63 @@ describe("/transcribe websocket proxy", () => {
 
     client.close()
   })
+
+  describe("auth gate (SUPABASE_URL/SUPABASE_ANON_KEY configured, or a test client injected)", () => {
+    function fakeAuthClient(getUser: (token: string) => Promise<{ data: any; error: any }>) {
+      return { auth: { getUser } }
+    }
+
+    async function rebuildWithAuthClient(authClient: ReturnType<typeof fakeAuthClient>) {
+      await server.close()
+      server = await buildServer({
+        logger: false,
+        authClient,
+        proxyOptions: { apiKey: "test-key", deepgramUrl: `ws://127.0.0.1:${mockDeepgramPort}` },
+      })
+      await server.listen({ port: 0, host: "127.0.0.1" })
+    }
+
+    it("rejects a connection with no token", async () => {
+      await rebuildWithAuthClient(
+        fakeAuthClient(async () => ({ data: { user: null }, error: new Error("no token") }))
+      )
+
+      const client = new WebSocket(transcribeUrl())
+      const closeCode = await new Promise<number>((resolve) => client.on("close", (code) => resolve(code)))
+      expect(closeCode).toBe(4001)
+    })
+
+    it("rejects a connection whose token Supabase reports as invalid", async () => {
+      await rebuildWithAuthClient(
+        fakeAuthClient(async () => ({ data: { user: null }, error: { message: "invalid JWT" } }))
+      )
+
+      const client = new WebSocket(`${transcribeUrl()}?token=bad-token`)
+      const closeCode = await new Promise<number>((resolve) => client.on("close", (code) => resolve(code)))
+      expect(closeCode).toBe(4001)
+    })
+
+    it("accepts a connection with a token Supabase reports as valid, and proxies normally", async () => {
+      const getUser = vi.fn(async (token: string) => ({
+        data: { user: { id: "user-123", email: "sam@example.com" } },
+        error: null,
+      }))
+      await rebuildWithAuthClient(fakeAuthClient(getUser))
+
+      const client = new WebSocket(`${transcribeUrl()}?token=good-token`)
+      const messages: any[] = []
+      await new Promise<void>((resolve, reject) => {
+        client.on("message", (data) => {
+          messages.push(JSON.parse(data.toString()))
+          resolve()
+        })
+        client.on("error", reject)
+        client.on("close", (code) => reject(new Error(`closed unexpectedly with code ${code}`)))
+      })
+
+      expect(getUser).toHaveBeenCalledWith("good-token")
+      expect(messages).toContainEqual({ type: "Ready" })
+      client.close()
+    })
+  })
 })

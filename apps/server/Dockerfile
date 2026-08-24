@@ -25,8 +25,9 @@ RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
-# Required at runtime: DEEPGRAM_API_KEY, DEEPL_API_KEY, SUPABASE_JWT_SECRET
-# (omit to run auth-open — fine for a private/dev deploy, not for production).
+# Required at runtime: DEEPGRAM_API_KEY, DEEPL_API_KEY, SUPABASE_URL,
+# SUPABASE_ANON_KEY (omit the last two to run auth-open — fine for a
+# private/dev deploy, not for production).
 # See .env.example. PORT defaults to 3001, HOST defaults to 0.0.0.0.
 EXPOSE 3001
 CMD ["node", "dist/index.js"]
