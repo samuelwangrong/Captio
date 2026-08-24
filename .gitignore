@@ -17,8 +17,3 @@ playwright-report/
 # This is a pnpm workspace — npm/yarn lockfiles are accidental.
 package-lock.json
 yarn.lock
-
-# git push from this environment is rejected for workflow-file changes
-# (OAuth token lacks the `workflow` scope) — keep it on disk, untracked,
-# until that's fixed. See commit history for details.
-.github/workflows/
