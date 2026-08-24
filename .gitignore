@@ -17,4 +17,3 @@ playwright-report/
 # This is a pnpm workspace — npm/yarn lockfiles are accidental.
 package-lock.json
 yarn.lock
-.github/workflows/
