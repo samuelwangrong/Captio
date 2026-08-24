@@ -8,11 +8,13 @@ import { test as base, chromium, type BrowserContext } from "@playwright/test"
 // causes esbuild/Playwright to emit a broken CJS/ESM hybrid module here —
 // "ReferenceError: exports is not defined in ES module scope".)
 
-// build/chrome-mv3-dev is produced by `pnpm build` (plasmo build, dev target).
-// We test against the dev build because plasmo's prod build minifies/renames
-// chunks the same way; either works, but dev is what `pnpm dev` produces and
-// is rebuilt most often during development.
-export const EXTENSION_PATH = path.resolve(__dirname, "../../build/chrome-mv3-dev")
+// build/chrome-mv3-prod is produced by `pnpm build` (plasmo build). Despite
+// the name, this is the only static build `plasmo build` can produce —
+// Plasmo hardcodes NODE_ENV=production for the `build` command, so
+// `chrome-mv3-dev` is never an output of it. That directory only exists
+// while `plasmo dev`'s long-running watcher is active, which isn't suitable
+// for a one-shot e2e run — so we test against the prod build, same as CI.
+export const EXTENSION_PATH = path.resolve(__dirname, "../../build/chrome-mv3-prod")
 
 export const test = base.extend<{
   context: BrowserContext

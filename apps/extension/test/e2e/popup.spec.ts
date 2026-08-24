@@ -8,11 +8,11 @@ import { expect, test } from "./fixtures"
  */
 
 test.describe("popup", () => {
-  test("shows the sign-in link and an idle, off toggle by default", async ({ context, extensionId }) => {
+  test("shows the sign-in button and an idle, off toggle by default", async ({ context, extensionId }) => {
     const page = await context.newPage()
     await page.goto(`chrome-extension://${extensionId}/popup.html`)
 
-    await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible()
+    await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible()
     await expect(page.getByText("Idle")).toBeVisible()
     await expect(page.getByRole("switch")).toHaveAttribute("aria-checked", "false")
   })

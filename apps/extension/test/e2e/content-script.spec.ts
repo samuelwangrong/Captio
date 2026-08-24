@@ -49,16 +49,21 @@ test.describe("YouTube content script", () => {
 
     // Simulate background forwarding a Deepgram transcript to this tab, the
     // same way it does after TOGGLE_CAPTIONS + a TRANSCRIPT from the offscreen doc.
+    // CAPTIONS_STARTED must come first — that's what shows the caption box
+    // (captio-active); TRANSCRIPT alone only fills in the text.
     await worker.evaluate(async () => {
       const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" })
       for (const tab of tabs) {
-        if (tab.id) chrome.tabs.sendMessage(tab.id, { type: "TRANSCRIPT", text: "hello from e2e", isFinal: true })
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, { type: "CAPTIONS_STARTED" })
+          chrome.tabs.sendMessage(tab.id, { type: "TRANSCRIPT", text: "hello from e2e", isFinal: true })
+        }
       }
     })
 
     const caption = page.locator("#captio-caption")
     await expect(caption).toHaveText("hello from e2e")
-    await expect(caption).toHaveClass(/captio-visible/)
+    await expect(caption).toHaveClass(/captio-active/)
   })
 
   test("CAPTIONS_STOPPED hides a visible caption", async ({ context }) => {
@@ -72,12 +77,21 @@ test.describe("YouTube content script", () => {
       const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" })
       for (const tab of tabs) {
         if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, { type: "CAPTIONS_STARTED" })
           chrome.tabs.sendMessage(tab.id, { type: "TRANSCRIPT", text: "still going", isFinal: false })
-          chrome.tabs.sendMessage(tab.id, { type: "CAPTIONS_STOPPED" })
         }
       }
     })
 
-    await expect(page.locator("#captio-caption")).not.toHaveClass(/captio-visible/)
+    await expect(page.locator("#captio-caption")).toHaveClass(/captio-active/)
+
+    await worker.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" })
+      for (const tab of tabs) {
+        if (tab.id) chrome.tabs.sendMessage(tab.id, { type: "CAPTIONS_STOPPED" })
+      }
+    })
+
+    await expect(page.locator("#captio-caption")).not.toHaveClass(/captio-active/)
   })
 })
