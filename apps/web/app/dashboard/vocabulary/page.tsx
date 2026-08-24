@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { ReviewMode } from "./ReviewMode"
+import { Pagination } from "../Pagination"
 
 interface VocabRow {
   id: string
@@ -11,23 +12,48 @@ interface VocabRow {
   created_at: string
 }
 
-export default async function VocabularyPage() {
+const PAGE_SIZE = 20
+// Review mode cycles through recent words independent of the list's page —
+// capped so a heavy user's flashcard deck doesn't pull in the entire table.
+const REVIEW_LIMIT = 200
+
+export default async function VocabularyPage({
+  searchParams,
+}: {
+  searchParams: { page?: string }
+}) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect("/auth/login")
 
-  const { data: words } = await supabase
-    .from("vocabulary")
-    .select("id, word, context, language, video_title, created_at")
-    .order("created_at", { ascending: false })
-    .returns<VocabRow[]>()
+  const page = Math.max(1, parseInt(searchParams.page ?? "1", 10) || 1)
+  const from = (page - 1) * PAGE_SIZE
+  const to = from + PAGE_SIZE - 1
+
+  const [{ data: words, count }, { data: reviewWords }] = await Promise.all([
+    supabase
+      .from("vocabulary")
+      .select("id, word, context, language, video_title, created_at", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(from, to)
+      .returns<VocabRow[]>(),
+    supabase
+      .from("vocabulary")
+      .select("id, word, context, video_title")
+      .order("created_at", { ascending: false })
+      .limit(REVIEW_LIMIT)
+      .returns<Pick<VocabRow, "id" | "word" | "context" | "video_title">[]>(),
+  ])
+
+  const hasNext = count !== null && to < count - 1
 
   async function deleteWord(formData: FormData) {
     "use server"
     const id = formData.get("id") as string
+    const returnPage = formData.get("page") as string
     const supabase = createClient()
     await supabase.from("vocabulary").delete().eq("id", id)
-    redirect("/dashboard/vocabulary")
+    redirect(`/dashboard/vocabulary?page=${returnPage}`)
   }
 
   return (
@@ -36,13 +62,13 @@ export default async function VocabularyPage() {
 
       {!words || words.length === 0 ? (
         <p className="text-body text-text-secondary">
-          Nothing saved yet — click any word in the caption overlay while signed in to save it here.
+          {page > 1
+            ? "No more words on this page."
+            : "Nothing saved yet — click any word in the caption overlay while signed in to save it here."}
         </p>
       ) : (
         <>
-          <ReviewMode
-            cards={words.map((w) => ({ id: w.id, word: w.word, context: w.context, video_title: w.video_title }))}
-          />
+          {reviewWords && reviewWords.length > 0 && <ReviewMode cards={reviewWords} />}
 
           <ul className="flex flex-col gap-space-2">
             {words.map((w) => (
@@ -56,6 +82,7 @@ export default async function VocabularyPage() {
                 </div>
                 <form action={deleteWord} className="shrink-0">
                   <input type="hidden" name="id" value={w.id} />
+                  <input type="hidden" name="page" value={page} />
                   <button
                     type="submit"
                     className="text-label text-text-secondary hover:text-error transition-colors"
@@ -66,6 +93,8 @@ export default async function VocabularyPage() {
               </li>
             ))}
           </ul>
+
+          <Pagination basePath="/dashboard/vocabulary" page={page} hasNext={hasNext} />
         </>
       )}
     </div>
