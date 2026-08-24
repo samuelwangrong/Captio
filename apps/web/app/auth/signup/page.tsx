@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import { AuthLayout } from "../_components/AuthLayout"
 import { Divider } from "../_components/Divider"
 import { Field } from "../_components/Field"
@@ -9,6 +9,14 @@ import { GoogleButton } from "../_components/GoogleButton"
 import { createClient } from "@/lib/supabase/client"
 
 export default function SignupPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignupForm />
+    </Suspense>
+  )
+}
+
+function SignupForm() {
   const [email,    setEmail]    = useState("")
   const [password, setPassword] = useState("")
   const [loading,  setLoading]  = useState(false)

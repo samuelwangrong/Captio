@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import { AuthLayout } from "../_components/AuthLayout"
 import { Divider } from "../_components/Divider"
 import { Field } from "../_components/Field"
@@ -10,6 +10,14 @@ import { GoogleButton } from "../_components/GoogleButton"
 import { createClient } from "@/lib/supabase/client"
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const source = searchParams.get("source")
