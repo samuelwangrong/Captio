@@ -2,11 +2,15 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createChromeMock, createMessageBus } from "./test/mocks/chrome"
 
-async function loadOptions(storage: Record<string, any> = {}) {
+async function loadOptions(
+  storage: Record<string, any> = {},
+  sendMessageImpl?: (message: any, callback?: (response?: any) => void) => void
+) {
   const bus = createMessageBus()
   for (const [k, v] of Object.entries(storage)) bus.storage.set(k, v)
 
   const chromeMock = createChromeMock({ context: "popup", bus })
+  if (sendMessageImpl) chromeMock.runtime.sendMessage = vi.fn(sendMessageImpl) as any
   vi.stubGlobal("chrome", chromeMock)
   vi.resetModules()
   const { default: Options } = await import("./options")
@@ -35,7 +39,7 @@ describe("options.tsx", () => {
 
     expect(screen.getByText("18px")).toBeInTheDocument()
     expect(screen.getByText("75%")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: /sign in to captio/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /sign in to captio/i })).toBeInTheDocument()
   })
 
   it("loads stored caption settings and account info from chrome.storage.local", async () => {
@@ -81,15 +85,35 @@ describe("options.tsx", () => {
     expect(screen.getByRole("button", { name: /^save settings$/i })).toBeInTheDocument()
   })
 
-  it("Log out clears the stored account and shows the sign-in link again", async () => {
-    const { bus } = await loadOptions({ userEmail: "sam@example.com", userToken: "secret-token" })
+  it("Log out sends SIGN_OUT to the background and shows the sign-in button again", async () => {
+    // Simulate background.ts's SIGN_OUT handler: clears the cached email and
+    // responds ok (see background.ts's own listener for the real
+    // implementation — this test only exercises options.tsx's side).
+    const { bus } = await loadOptions(
+      { userEmail: "sam@example.com" },
+      (message, callback) => {
+        if (message.type === "SIGN_OUT") {
+          bus.storage.delete("userEmail")
+          callback?.({ ok: true })
+        }
+      }
+    )
 
     const logoutButton = await screen.findByRole("button", { name: /log out/i })
     fireEvent.click(logoutButton)
 
-    expect(screen.getByRole("link", { name: /sign in to captio/i })).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: /sign in to captio/i })).toBeInTheDocument()
     expect(bus.storage.has("userEmail")).toBe(false)
-    expect(bus.storage.has("userToken")).toBe(false)
+  })
+
+  it("changing the Spoken/Caption language selects persists them to chrome.storage.local", async () => {
+    const { bus } = await loadOptions()
+
+    fireEvent.change(screen.getByLabelText(/spoken language/i), { target: { value: "es" } })
+    fireEvent.change(screen.getByLabelText(/caption language/i), { target: { value: "FR" } })
+
+    expect(bus.storage.get("spokenLanguage")).toBe("es")
+    expect(bus.storage.get("captionLanguage")).toBe("FR")
   })
 
   it("Clear cache only removes keys prefixed with 'transcript:'", async () => {

@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react"
 import "./style.css"
+import {
+  CAPTION_LANGUAGES,
+  DEFAULT_CAPTION_LANGUAGE,
+  DEFAULT_SPOKEN_LANGUAGE,
+  SPOKEN_LANGUAGES,
+  STORAGE_KEYS,
+} from "./lib/languages"
 
 export default function Options() {
   const [fontSize,  setFontSize]  = useState(18)
@@ -7,17 +14,30 @@ export default function Options() {
   const [bgOpacity, setBgOpacity] = useState(75)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [saved,     setSaved]     = useState(false)
+  const [spokenLanguage, setSpokenLanguage]     = useState(DEFAULT_SPOKEN_LANGUAGE)
+  const [captionLanguage, setCaptionLanguage]   = useState(DEFAULT_CAPTION_LANGUAGE)
 
   useEffect(() => {
     chrome.storage.local.get(
-      ["fontSize", "textColor", "bgOpacity", "userEmail"],
+      ["fontSize", "textColor", "bgOpacity", "userEmail", STORAGE_KEYS.spokenLanguage, STORAGE_KEYS.captionLanguage],
       (result) => {
         if (result.fontSize)              setFontSize(result.fontSize)
         if (result.textColor)             setTextColor(result.textColor)
         if (result.bgOpacity !== undefined) setBgOpacity(result.bgOpacity)
         if (result.userEmail)             setUserEmail(result.userEmail)
+        if (result[STORAGE_KEYS.spokenLanguage])  setSpokenLanguage(result[STORAGE_KEYS.spokenLanguage])
+        if (result[STORAGE_KEYS.captionLanguage]) setCaptionLanguage(result[STORAGE_KEYS.captionLanguage])
       }
     )
+
+    // Prefer the live Supabase session over the cached userEmail above.
+    try {
+      chrome.runtime.sendMessage({ type: "GET_AUTH_SESSION" }, (response) => {
+        if (chrome.runtime.lastError) return
+        const email = response?.session?.user?.email ?? null
+        if (email) setUserEmail(email)
+      })
+    } catch { /* extension context invalidated on hot-reload */ }
   }, [])
 
   const handleSave = () => {
@@ -26,9 +46,26 @@ export default function Options() {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  const handleSpokenLanguageChange = (value: string) => {
+    setSpokenLanguage(value)
+    chrome.storage.local.set({ [STORAGE_KEYS.spokenLanguage]: value })
+  }
+
+  const handleCaptionLanguageChange = (value: string) => {
+    setCaptionLanguage(value)
+    chrome.storage.local.set({ [STORAGE_KEYS.captionLanguage]: value })
+  }
+
   const handleLogout = () => {
-    chrome.storage.local.remove(["userEmail", "userToken"])
-    setUserEmail(null)
+    try {
+      chrome.runtime.sendMessage({ type: "SIGN_OUT" }, () => setUserEmail(null))
+    } catch { /* extension context invalidated on hot-reload */ }
+  }
+
+  const handleSignIn = () => {
+    try {
+      chrome.runtime.sendMessage({ type: "OPEN_SIGN_IN" })
+    } catch { /* extension context invalidated on hot-reload */ }
   }
 
   const handleClearCache = () => {
@@ -99,25 +136,58 @@ export default function Options() {
           </div>
         </section>
 
+        {/* Language */}
+        <section className="mb-space-8">
+          <h2 className="text-headline-md text-on-surface mb-space-4">Language</h2>
+          <div className="bg-surface border border-border rounded-xl p-space-6 space-y-space-4">
+            <div className="flex items-center justify-between gap-space-4">
+              <label className="text-body text-on-surface" htmlFor="spoken-language">Spoken language</label>
+              <select
+                id="spoken-language"
+                value={spokenLanguage}
+                onChange={(e) => handleSpokenLanguageChange(e.target.value)}
+                className="bg-surface-raised border border-border rounded-sm px-space-3 py-space-2 text-body text-on-surface focus:outline-none focus:border-accent"
+              >
+                {SPOKEN_LANGUAGES.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.flag} {lang.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center justify-between gap-space-4">
+              <label className="text-body text-on-surface" htmlFor="caption-language">Caption language</label>
+              <select
+                id="caption-language"
+                value={captionLanguage}
+                onChange={(e) => handleCaptionLanguageChange(e.target.value)}
+                className="bg-surface-raised border border-border rounded-sm px-space-3 py-space-2 text-body text-on-surface focus:outline-none focus:border-accent"
+              >
+                {CAPTION_LANGUAGES.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.flag} {lang.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+
         {/* Account */}
         <section className="mb-space-8">
           <h2 className="text-headline-md text-on-surface mb-space-4">Account</h2>
           <div className="bg-surface border border-border rounded-xl p-space-6">
             {userEmail ? (
               <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-body text-on-surface">{userEmail}</p>
-                  <p className="text-body-sm text-accent">Pro Account</p>
-                </div>
+                <p className="text-body text-on-surface">{userEmail}</p>
                 <button onClick={handleLogout} className="text-body text-error hover:underline">
                   Log out
                 </button>
               </div>
             ) : (
-              <a href="https://captio.ai/auth/login" target="_blank" rel="noreferrer"
-                className="text-body text-accent hover:underline">
+              <button onClick={handleSignIn} className="text-body text-accent hover:underline">
                 Sign in to Captio
-              </a>
+              </button>
             )}
           </div>
         </section>

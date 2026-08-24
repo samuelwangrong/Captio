@@ -123,7 +123,7 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-border py-space-8 mt-auto">
         <div className="max-w-5xl mx-auto px-space-6 flex flex-col md:flex-row justify-between items-center gap-4">
-          <span className="text-body-sm text-text-secondary">© 2024 Captio. All rights reserved.</span>
+          <span className="text-body-sm text-text-secondary">© {new Date().getFullYear()} Captio. All rights reserved.</span>
           <div className="flex gap-space-6">
             <Link href="/privacy" className="text-body-sm text-text-secondary hover:text-primary transition-colors">Privacy</Link>
             <Link href="/terms"   className="text-body-sm text-text-secondary hover:text-primary transition-colors">Terms</Link>
