@@ -211,7 +211,7 @@ export default function Popup() {
           {userEmail ? (
             <div className="flex items-center justify-between p-space-3 rounded-lg bg-surface border border-border">
               <div className="flex items-center gap-space-3 overflow-hidden">
-                <div className="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-white text-xs font-bold shrink-0">
+                <div className="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center text-white text-xs font-bold shrink-0">
                   {userEmail[0].toUpperCase()}
                 </div>
                 <div className="flex flex-col overflow-hidden">
