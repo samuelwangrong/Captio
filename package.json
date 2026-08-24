@@ -5,6 +5,7 @@
   "scripts": {
     "dev:web": "pnpm --filter web dev",
     "dev:extension": "pnpm --filter extension dev",
+    "dev:server": "pnpm --filter @captio/server dev",
     "build:web": "pnpm --filter web build",
     "build:extension": "pnpm --filter extension build",
     "typecheck": "pnpm -r --if-present run typecheck",
