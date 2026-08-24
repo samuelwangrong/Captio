@@ -38,7 +38,12 @@ import {
   getDeepLTargetLang,
 } from "../lib/languages"
 
-const SERVER_URL = "ws://localhost:3001/transcribe"
+// Points at the local dev server by default. A real production build must
+// override this with PLASMO_PUBLIC_SERVER_URL (set at build time — see
+// .env.example) pointing at the deployed apps/server instance
+// (apps/server/Dockerfile), or every capture will silently fail for anyone
+// not running a local server.
+const SERVER_URL = process.env.PLASMO_PUBLIC_SERVER_URL || "ws://localhost:3001/transcribe"
 const KEEPALIVE_INTERVAL_MS = 5000
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

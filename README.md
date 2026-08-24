@@ -58,9 +58,9 @@ Each app needs its own env file — copy the `.env.example` (or
 
 | App | File | Required for |
 |---|---|---|
-| `apps/extension` | `.env.example` | Supabase URL/anon key (auth) |
+| `apps/extension` | `.env.example` | Supabase URL/anon key (auth), server WebSocket URL (defaults to localhost for dev — **must** be set to the deployed server before a real build, see Deployment below) |
 | `apps/server` | `.env.example` | Deepgram key (required), DeepL key (translation), Supabase JWT secret (auth gate — omit to run open) |
-| `apps/web` | `.env.local.example` | Supabase URL/anon key (required), `YOUTUBE_API_KEY` (optional — gates the Explore page) |
+| `apps/web` | `.env.local.example` | Supabase URL/anon key (required), `YOUTUBE_API_KEY` (optional — gates the Explore page), `SUPABASE_SERVICE_ROLE_KEY` (optional — gates self-serve account deletion on /dashboard/account) |
 
 Database schema lives in `supabase/migrations/`. With the [Supabase
 CLI](https://supabase.com/docs/guides/cli) and Docker, `supabase start` runs
@@ -88,9 +88,11 @@ pnpm --filter extension test:e2e   # Playwright, needs `pnpm build:extension` fi
 
 ## Deployment
 
-- **Extension**: `pnpm build:extension`, then upload `apps/extension/build/chrome-mv3-prod` to the Chrome Web Store.
-- **Web**: any Next.js host (Vercel, etc.) — set the env vars above.
+Deploy the server first — the extension needs its URL to build correctly.
+
 - **Server**: needs a long-lived process, not serverless (it holds WebSocket connections). `apps/server/Dockerfile` builds a standalone image for Fly.io/Railway/Render/any Docker host.
+- **Extension**: set `PLASMO_PUBLIC_SERVER_URL` in `apps/extension/.env` to the deployed server's `wss://` URL, *then* `pnpm build:extension` (this bakes the URL in at build time), and upload `apps/extension/build/chrome-mv3-prod` to the Chrome Web Store. Skipping this step ships an extension that only works for whoever happens to be running a local dev server — it silently fails for everyone else.
+- **Web**: any Next.js host (Vercel, etc.) — set the env vars above.
 
 ## Status
 
