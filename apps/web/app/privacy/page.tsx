@@ -48,9 +48,12 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-headline-md text-primary mb-space-2">Your data, your control</h2>
             <p>
-              You can delete any saved transcript or vocabulary entry at any time from your dashboard.
-              To delete your account entirely, contact us and we&apos;ll remove your account and all
-              associated data.
+              You can delete any saved transcript or vocabulary entry at any time from your dashboard,
+              or delete your account entirely — along with everything tied to it — from{" "}
+              <Link href="/dashboard/account" className="text-primary hover:underline">
+                Account settings
+              </Link>
+              .
             </p>
           </section>
 

@@ -28,6 +28,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               Explore
             </Link>
+            <Link
+              href="/dashboard/account"
+              className="text-body-sm text-on-surface hover:text-primary transition-colors"
+            >
+              Account
+            </Link>
           </nav>
         </div>
       </header>
