@@ -32,6 +32,7 @@ import {
   STORAGE_KEYS,
 } from "./lib/languages"
 import { resolveTabId as resolveTabIdImpl } from "./lib/tab-resolver"
+import { getSession, openSignInPage, setSessionFromRelay, signOut } from "./lib/auth"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ let pendingStart: {
   tabId: number
   spokenLanguage: string
   captionLanguage: string
+  accessToken?: string
 } | null = null
 
 // ─── Offscreen document ───────────────────────────────────────────────────────
@@ -94,15 +96,17 @@ async function startCapture(tabId: number) {
 
     await ensureOffscreen()
 
-    // Read the "Spoken language" / "Caption language" picker choices (set in
-    // popup.tsx, persisted to chrome.storage.local). Offscreen documents can't
-    // access chrome.storage, so resolve them here and forward as part of
-    // START_CAPTURE.
+    // Read language picker choices and auth token from storage.
+    // Offscreen documents can't access chrome.storage, so everything is
+    // resolved here and forwarded as part of START_CAPTURE.
     const { [STORAGE_KEYS.spokenLanguage]: spokenLanguage, [STORAGE_KEYS.captionLanguage]: captionLanguage } =
       await chrome.storage.local.get({
         [STORAGE_KEYS.spokenLanguage]: DEFAULT_SPOKEN_LANGUAGE,
         [STORAGE_KEYS.captionLanguage]: DEFAULT_CAPTION_LANGUAGE,
       })
+
+    const session = await getSession()
+    const accessToken = session?.access_token
 
     // Pass tabId alongside streamId so the offscreen doc can embed it in every
     // TRANSCRIPT message — this means transcripts reach the content script even
@@ -115,9 +119,10 @@ async function startCapture(tabId: number) {
         tabId,
         spokenLanguage,
         captionLanguage,
+        accessToken,
       })
     } else {
-      pendingStart = { streamId, tabId, spokenLanguage, captionLanguage }
+      pendingStart = { streamId, tabId, spokenLanguage, captionLanguage, accessToken }
     }
 
     isCapturing = true
@@ -205,6 +210,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         tabId: pendingStart.tabId,
         spokenLanguage: pendingStart.spokenLanguage,
         captionLanguage: pendingStart.captionLanguage,
+        accessToken: pendingStart.accessToken,
       })
       pendingStart = null
     }
@@ -241,6 +247,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (tabId) chrome.tabs.sendMessage(tabId, { type: "CAPTION_ERROR" })
     })
     cleanup()
+  }
+
+  // ── Auth messages ──
+  if (msg.type === "AUTH_SESSION_RELAY") {
+    ;(async () => {
+      await setSessionFromRelay(msg)
+      sendResponse({ ok: true })
+    })()
+    return true
+  }
+
+  if (msg.type === "GET_AUTH_SESSION") {
+    ;(async () => {
+      const session = await getSession()
+      sendResponse({ session })
+    })()
+    return true
+  }
+
+  if (msg.type === "SIGN_OUT") {
+    ;(async () => {
+      await signOut()
+      chrome.storage.local.remove("userEmail")
+      sendResponse({ ok: true })
+    })()
+    return true
+  }
+
+  if (msg.type === "OPEN_SIGN_IN") {
+    openSignInPage()
+    return false
   }
 
   // ── From content script ──

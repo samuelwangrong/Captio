@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import fastifyWebsocket from '@fastify/websocket'
 import { createDeepgramProxy, type DeepgramProxyOptions } from './proxy.js'
+import { verifySupabaseToken } from './auth.js'
 
 export interface BuildServerOptions {
   /**
@@ -32,7 +33,17 @@ export async function buildServer(options: BuildServerOptions = {}) {
   //                                 language as the Spoken language (no translation).
   fastify.register(async (instance) => {
     instance.get('/transcribe', { websocket: true }, (socket, req) => {
-      const query = req.query as { language?: string; targetLang?: string }
+      const query = req.query as { language?: string; targetLang?: string; token?: string }
+
+      // Require a valid Supabase JWT when the secret is configured.
+      if (process.env.SUPABASE_JWT_SECRET) {
+        const user = query.token ? verifySupabaseToken(query.token) : null
+        if (!user) {
+          socket.close(4001, 'Authentication required')
+          return
+        }
+      }
+
       createDeepgramProxy(socket, {
         ...options.proxyOptions,
         language: query.language || options.proxyOptions?.language,

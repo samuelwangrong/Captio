@@ -2,19 +2,31 @@
 
 import Link from "next/link"
 import { useState } from "react"
-import { AuthLayout, Field } from "../login/page"
+import { AuthLayout } from "../_components/AuthLayout"
+import { Field } from "../_components/Field"
+import { createClient } from "@/lib/supabase/client"
 
 export default function ForgotPasswordPage() {
   const [email,   setEmail]   = useState("")
   const [loading, setLoading] = useState(false)
   const [sent,    setSent]    = useState(false)
+  const [error,   setError]   = useState("")
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    // TODO: wire up password reset
-    await new Promise((r) => setTimeout(r, 1000))
+    setError("")
+
+    const supabase = createClient()
+    const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    })
+
     setLoading(false)
+    if (authError) {
+      setError(authError.message)
+      return
+    }
     setSent(true)
   }
 
@@ -32,7 +44,16 @@ export default function ForgotPasswordPage() {
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-space-3">
-          <Field label="Email address" id="email" type="email" value={email} onChange={setEmail} placeholder="name@example.com" />
+          <Field
+            label="Email address"
+            id="email"
+            type="email"
+            value={email}
+            onChange={setEmail}
+            placeholder="name@example.com"
+          />
+
+          {error && <p className="text-body-sm text-error">{error}</p>}
 
           <button
             type="submit"
@@ -43,7 +64,9 @@ export default function ForgotPasswordPage() {
           </button>
 
           <p className="text-center text-body-sm text-text-secondary mt-space-1">
-            <Link href="/auth/login" className="text-primary hover:underline">Back to sign in</Link>
+            <Link href="/auth/login" className="text-primary hover:underline">
+              Back to sign in
+            </Link>
           </p>
         </form>
       )}

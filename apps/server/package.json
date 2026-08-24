@@ -16,11 +16,13 @@
   },
   "dependencies": {
     "@fastify/websocket": "^10.0.1",
+    "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "ws": "^8.18.0",
-    "dotenv": "^16.4.5"
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.11.5",
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.1",

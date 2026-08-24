@@ -45,9 +45,31 @@ export default function Popup() {
   const [captionLanguage, setCaptionLanguage] = useState(DEFAULT_CAPTION_LANGUAGE)
 
   useEffect(() => {
-    chrome.storage.local.get(["userEmail"], (result) => {
-      if (result.userEmail) setUserEmail(result.userEmail)
-    })
+    // Prefer the live Supabase session over the cached userEmail in storage.
+    try {
+      chrome.runtime.sendMessage({ type: "GET_AUTH_SESSION" }, (response) => {
+        if (chrome.runtime.lastError) {
+          // Fall back to storage if the background isn't ready.
+          chrome.storage.local.get(["userEmail"], (r) => {
+            if (r.userEmail) setUserEmail(r.userEmail)
+          })
+          return
+        }
+        const email = response?.session?.user?.email ?? null
+        if (email) {
+          setUserEmail(email)
+        } else {
+          // No live session — check legacy storage key.
+          chrome.storage.local.get(["userEmail"], (r) => {
+            if (r.userEmail) setUserEmail(r.userEmail)
+          })
+        }
+      })
+    } catch {
+      chrome.storage.local.get(["userEmail"], (r) => {
+        if (r.userEmail) setUserEmail(r.userEmail)
+      })
+    }
 
     // Restore the "Spoken language" / "Caption language" picker choices.
     chrome.storage.local.get(
@@ -187,28 +209,42 @@ export default function Popup() {
         {/* Account row */}
         <footer>
           {userEmail ? (
-            <div className="flex items-center justify-between p-space-3 rounded-lg bg-surface border border-border hover:border-accent transition-colors cursor-pointer">
+            <div className="flex items-center justify-between p-space-3 rounded-lg bg-surface border border-border">
               <div className="flex items-center gap-space-3 overflow-hidden">
                 <div className="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-white text-xs font-bold shrink-0">
                   {userEmail[0].toUpperCase()}
                 </div>
                 <div className="flex flex-col overflow-hidden">
                   <span className="text-body-sm font-medium text-on-surface truncate">{userEmail}</span>
-                  <span className="text-[10px] text-accent">Pro Account</span>
+                  <span className="text-[10px] text-text-secondary">Captio account</span>
                 </div>
               </div>
-              <ChevronRightIcon />
+              <button
+                onClick={() => {
+                  try {
+                    chrome.runtime.sendMessage({ type: "SIGN_OUT" }, () => {
+                      setUserEmail(null)
+                    })
+                  } catch { /* context invalidated */ }
+                }}
+                className="text-label text-text-secondary hover:text-error transition-colors shrink-0 ml-space-2"
+                aria-label="Sign out"
+              >
+                Sign out
+              </button>
             </div>
           ) : (
-            <a
-              href="https://captio.ai/auth/login"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              onClick={() => {
+                try {
+                  chrome.runtime.sendMessage({ type: "OPEN_SIGN_IN" })
+                } catch { /* context invalidated */ }
+              }}
               className="w-full flex items-center justify-center gap-space-2 p-space-3 rounded-lg bg-surface border border-border hover:border-accent transition-colors text-accent text-body font-medium"
             >
               <PersonIcon />
               Sign in
-            </a>
+            </button>
           )}
         </footer>
       </main>

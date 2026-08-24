@@ -74,7 +74,7 @@ export default function OffscreenPage() {
 
     const onMessage = (msg: any) => {
       if (msg.target !== "offscreen") return
-      if (msg.type === "START_CAPTURE")  startCapture(msg.streamId, msg.tabId, msg.spokenLanguage, msg.captionLanguage)
+      if (msg.type === "START_CAPTURE")  startCapture(msg.streamId, msg.tabId, msg.spokenLanguage, msg.captionLanguage, msg.accessToken)
       if (msg.type === "STOP_CAPTURE")   stopCapture()
       if (msg.type === "PAUSE_CAPTURE")  pauseCapture()
       if (msg.type === "RESUME_CAPTURE") resumeCapture()
@@ -89,7 +89,7 @@ export default function OffscreenPage() {
 
   // ─── Capture ────────────────────────────────────────────────────────────────
 
-  async function startCapture(streamId: string, tabId?: number, spokenLanguage?: string, captionLanguage?: string) {
+  async function startCapture(streamId: string, tabId?: number, spokenLanguage?: string, captionLanguage?: string, accessToken?: string) {
     tabIdRef.current = tabId ?? null
     isPausedRef.current = false
     try {
@@ -102,6 +102,7 @@ export default function OffscreenPage() {
       const wsUrl = new URL(SERVER_URL)
       wsUrl.searchParams.set("language", resolvedSpokenLanguage)
       if (targetLang) wsUrl.searchParams.set("targetLang", targetLang)
+      if (accessToken) wsUrl.searchParams.set("token", accessToken)
 
       // 1. Get the tab's MediaStream via the tabCapture stream ID.
       const stream = await navigator.mediaDevices.getUserMedia({
