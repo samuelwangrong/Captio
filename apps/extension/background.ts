@@ -31,14 +31,57 @@ import {
   DEFAULT_SPOKEN_LANGUAGE,
   STORAGE_KEYS,
 } from "./lib/languages"
+import { getVideoId } from "./lib/youtube-nav"
 import { resolveTabId as resolveTabIdImpl } from "./lib/tab-resolver"
 import { getSession, openSignInPage, setSessionFromRelay, signOut } from "./lib/auth"
+import { supabase } from "./lib/supabase"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let isCapturing = false
 let capturedTabId: number | null = null
 let offscreenReady = false
+
+// ─── Transcript session buffer ─────────────────────────────────────────────────
+// Every is_final TRANSCRIPT/TRANSLATION for the current capture is buffered
+// here and saved as one row in the `transcripts` table when the session ends
+// (see stopCapture -> saveTranscriptSession), if the user is signed in.
+
+let sessionSegments: Array<{ text: string; offsetMs: number }> = []
+let sessionStartedAt: number | null = null
+let sessionVideoId: string | null = null
+let sessionVideoTitle: string | null = null
+let sessionVideoUrl: string | null = null
+let sessionSpokenLanguage: string = DEFAULT_SPOKEN_LANGUAGE
+let sessionCaptionLanguage: string = DEFAULT_CAPTION_LANGUAGE
+
+function pushSegment(text: string) {
+  if (sessionStartedAt === null || !text.trim()) return
+  sessionSegments.push({ text, offsetMs: Date.now() - sessionStartedAt })
+}
+
+async function saveTranscriptSession() {
+  if (sessionSegments.length === 0) return
+  const segments = sessionSegments
+  sessionSegments = []
+
+  try {
+    const session = await getSession()
+    if (!session) return
+    const { error } = await supabase.from("transcripts").insert({
+      user_id: session.user.id,
+      video_id: sessionVideoId ?? "unknown",
+      video_title: sessionVideoTitle,
+      video_url: sessionVideoUrl,
+      spoken_language: sessionSpokenLanguage,
+      caption_language: sessionCaptionLanguage,
+      segments,
+    })
+    if (error) console.error("[captio bg] Failed to save transcript:", error.message)
+  } catch (err) {
+    console.error("[captio bg] Failed to save transcript:", err)
+  }
+}
 
 // Queued start payload, sent once the offscreen doc signals it's ready
 let pendingStart: {
@@ -108,6 +151,22 @@ async function startCapture(tabId: number) {
     const session = await getSession()
     const accessToken = session?.access_token
 
+    // Reset the transcript session buffer — see saveTranscriptSession().
+    sessionSegments = []
+    sessionStartedAt = Date.now()
+    sessionSpokenLanguage = spokenLanguage
+    sessionCaptionLanguage = captionLanguage
+    try {
+      const tab = await chrome.tabs.get(tabId)
+      sessionVideoId = tab.url ? getVideoId(tab.url) : null
+      sessionVideoTitle = tab.title?.replace(/ - YouTube$/, "") ?? null
+      sessionVideoUrl = tab.url ?? null
+    } catch {
+      sessionVideoId = null
+      sessionVideoTitle = null
+      sessionVideoUrl = null
+    }
+
     // Pass tabId alongside streamId so the offscreen doc can embed it in every
     // TRANSCRIPT message — this means transcripts reach the content script even
     // if this service worker is restarted and loses in-memory capturedTabId.
@@ -143,6 +202,7 @@ async function stopCapture() {
   if (!isCapturing) return
   chrome.runtime.sendMessage({ target: "offscreen", type: "STOP_CAPTURE" })
   if (capturedTabId) chrome.tabs.sendMessage(capturedTabId, { type: "CAPTIONS_STOPPED" })
+  await saveTranscriptSession()
   await cleanup()
 }
 
@@ -217,6 +277,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "TRANSCRIPT") {
+    if (msg.isFinal) pushSegment(msg.text)
     // Resolve the target tab asynchronously (handles SW restart case)
     resolveTabId(msg.tabId).then((tabId) => {
       if (tabId) {
@@ -230,6 +291,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "TRANSLATION") {
+    if (msg.isFinal) pushSegment(msg.text)
     resolveTabId(msg.tabId).then((tabId) => {
       if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRANSLATION", text: msg.text, isFinal: !!msg.isFinal })
     })
@@ -246,7 +308,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     resolveTabId().then((tabId) => {
       if (tabId) chrome.tabs.sendMessage(tabId, { type: "CAPTION_ERROR" })
     })
+    saveTranscriptSession()
     cleanup()
+  }
+
+  // ── Vocabulary saving (word clicked in the caption overlay) ──
+  if (msg.type === "SAVE_VOCAB") {
+    ;(async () => {
+      const session = await getSession()
+      if (!session) {
+        sendResponse({ ok: false, error: "not_signed_in" })
+        return
+      }
+      const { error } = await supabase.from("vocabulary").insert({
+        user_id: session.user.id,
+        word: msg.word,
+        context: msg.context ?? null,
+        language: msg.language ?? sessionSpokenLanguage,
+        video_id: msg.videoId ?? null,
+        video_title: msg.videoTitle ?? null,
+      })
+      if (error) {
+        console.error("[captio bg] Failed to save vocabulary:", error.message)
+        sendResponse({ ok: false, error: error.message })
+      } else {
+        sendResponse({ ok: true })
+      }
+    })()
+    return true
   }
 
   // ── Auth messages ──

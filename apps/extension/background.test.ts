@@ -199,6 +199,9 @@ describe("background.ts message router", () => {
     onOffscreenMessage.mockClear()
 
     content.runtime.sendMessage({ type: "STOP_CAPTIONS" })
+    // stopCapture() now awaits saveTranscriptSession() (a no-op here, since no
+    // segments were captured) before cleanup() — flush that microtask hop.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
     expect(state).toEqual({ isCapturing: false })
@@ -244,6 +247,16 @@ describe("background.ts message router", () => {
 
     const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
     expect(state).toEqual({ isCapturing: false })
+  })
+
+  it("SAVE_VOCAB responds not_signed_in when there's no active Supabase session", async () => {
+    const response = await new Promise((resolve) =>
+      content.runtime.sendMessage(
+        { type: "SAVE_VOCAB", word: "hola", context: "hola mundo", videoId: "abc123", videoTitle: "Test Video" },
+        resolve
+      )
+    )
+    expect(response).toEqual({ ok: false, error: "not_signed_in" })
   })
 
   describe("language settings (Spoken language / Caption language pickers)", () => {

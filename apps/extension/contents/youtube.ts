@@ -97,6 +97,22 @@ const CAPTION_STYLES = `
     text-overflow: ellipsis;
     min-height: 1.6em;
     text-align: left;
+    pointer-events: auto;
+  }
+
+  #captio-committed .captio-word {
+    cursor: pointer;
+    border-radius: 3px;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+
+  #captio-committed .captio-word:hover {
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  #captio-committed .captio-word.captio-saved {
+    color: #5B6EF5;
   }
 
   #captio-live {
@@ -144,6 +160,46 @@ function removeOverlay() {
   liveEl = null
 }
 
+// ─── Vocabulary saving (click a word in the committed row) ─────────────────────
+// The committed row (dim, top line) holds the previous fully-settled line —
+// stable enough to click, unlike the live row which is still being written to.
+// Clicking a word saves it (with the full line as context) to the
+// `vocabulary` table via background.ts's SAVE_VOCAB handler.
+
+function saveVocabWord(word: string, context: string, target: HTMLElement) {
+  const cleaned = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+  if (!cleaned) return
+
+  trySend({
+    type: "SAVE_VOCAB",
+    word: cleaned,
+    context,
+    videoId: currentVideoId,
+    videoTitle: document.title.replace(/ - YouTube$/, ""),
+  })
+
+  target.classList.add("captio-saved")
+  setTimeout(() => target.classList.remove("captio-saved"), 800)
+}
+
+/** Render `text` into `committedEl` as per-word spans so each word is clickable. */
+function setCommitted(text: string) {
+  if (!committedEl) return
+  committedEl.replaceChildren()
+  const words = text.split(/(\s+)/)
+  for (const chunk of words) {
+    if (/^\s+$/.test(chunk) || chunk === "") {
+      committedEl.appendChild(document.createTextNode(chunk))
+      continue
+    }
+    const span = document.createElement("span")
+    span.className = "captio-word"
+    span.textContent = chunk
+    span.addEventListener("click", () => saveVocabWord(chunk, text, span))
+    committedEl.appendChild(span)
+  }
+}
+
 // ─── Caption display ───────────────────────────────────────────────────────────
 
 // Returns the expected single-line clientHeight for liveEl (line-height + padding).
@@ -157,7 +213,7 @@ function singleLineHeight(): number {
 function rollUpIfWrapped() {
   if (!committedEl || !liveEl) return
   if (liveEl.clientHeight > singleLineHeight() * 1.3) {
-    committedEl.textContent = liveAccum
+    setCommitted(liveAccum)
     liveAccum = currentPartial
     liveEl.textContent = currentPartial
   }
@@ -172,7 +228,7 @@ function appendToLive(text: string) {
   const candidate = liveAccum ? `${liveAccum} ${text}` : text
   liveEl.textContent = candidate
   if (liveEl.clientHeight > singleLineHeight() * 1.3) {
-    committedEl.textContent = liveAccum
+    setCommitted(liveAccum)
     liveAccum = text
     liveEl.textContent = text
   } else {
@@ -206,7 +262,7 @@ function commitTranslation(text: string) {
   const candidate = liveAccum ? `${liveAccum} ${text}` : text
   liveEl.textContent = candidate
   if (liveEl.clientHeight > singleLineHeight() * 1.3) {
-    committedEl.textContent = liveAccum
+    setCommitted(liveAccum)
     liveAccum = text
     liveEl.textContent = text
   } else {
