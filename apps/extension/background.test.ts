@@ -9,8 +9,8 @@ import { createChromeMock, createMessageBus, fireAlarm, type MessageBus } from "
  * To get a clean slate per test we stub `chrome` with a fresh mock backed by
  * a fresh MessageBus, reset the module registry, and re-import the module.
  */
-async function loadBackground(bus: MessageBus) {
-  const background = createChromeMock({ context: "background", bus, tabId: 5 })
+async function loadBackground(bus: MessageBus, options: { tabUrl?: string } = {}) {
+  const background = createChromeMock({ context: "background", bus, tabId: 5, tabUrl: options.tabUrl })
   vi.stubGlobal("chrome", background)
   vi.resetModules()
   await import("./background")
@@ -39,6 +39,31 @@ describe("background.ts message router", () => {
   it("GET_STATE reports isCapturing: false before any capture starts", async () => {
     const response = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
     expect(response).toEqual({ isCapturing: false })
+  })
+
+  it("startCapture refuses to start on a non-YouTube tab (defense-in-depth for the popup's own toggle guard)", async () => {
+    // Reload background.ts against a non-YouTube tab. Mirrors the SW-restart
+    // test's pattern below: bus.contexts.delete("background") first, so the
+    // fresh listener doesn't end up registered alongside the beforeEach one.
+    bus.contexts.delete("background")
+    await loadBackground(bus, { tabUrl: "https://example.com/some-page" })
+
+    const onContentMessage = vi.fn()
+    content.runtime.onMessage.addListener(onContentMessage)
+
+    await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+
+    // Capture never actually started: no CAPTIONS_STARTED sent, no offscreen
+    // doc created, GET_STATE still reports idle.
+    expect(onContentMessage).not.toHaveBeenCalledWith(
+      { type: "CAPTIONS_STARTED" },
+      expect.any(Object),
+      expect.any(Function)
+    )
+    expect(bus.offscreenOpen).toBe(false)
+
+    const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+    expect(state).toEqual({ isCapturing: false })
   })
 
   it("TOGGLE_CAPTIONS without a tabId responds with an error and does not start capture", async () => {

@@ -32,3 +32,23 @@ export function getVideoId(input: string): string | null {
 export function isNewVideo(previousVideoId: string | null, nextVideoId: string | null): boolean {
   return nextVideoId !== previousVideoId
 }
+
+/**
+ * True if `url` is a youtube.com/watch page with a video id — the only kind
+ * of tab contents/youtube.ts's content script actually runs on. Used to
+ * disable "Enable on this video" on any other tab: without this guard,
+ * toggling it there still captures real tab audio and streams it to
+ * Deepgram/DeepL (real, metered cost), but there's no content script
+ * anywhere to inject the resulting captions into — a silently broken,
+ * silently billed no-op from the user's perspective.
+ */
+export function isYouTubeWatchUrl(url: string | null | undefined): boolean {
+  if (!url) return false
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  return /(^|\.)youtube\.com$/.test(parsed.hostname) && parsed.pathname === "/watch" && getVideoId(url) !== null
+}

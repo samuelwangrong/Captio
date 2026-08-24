@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getVideoId, isNewVideo } from "./youtube-nav"
+import { getVideoId, isNewVideo, isYouTubeWatchUrl } from "./youtube-nav"
 
 describe("getVideoId", () => {
   it("extracts the v= param from a full YouTube watch URL", () => {
@@ -46,5 +46,41 @@ describe("isNewVideo", () => {
 
   it("returns true when navigating away from a video to none", () => {
     expect(isNewVideo("abc123", null)).toBe(true)
+  })
+})
+
+describe("isYouTubeWatchUrl", () => {
+  it("returns true for a youtube.com/watch URL with a video id", () => {
+    expect(isYouTubeWatchUrl("https://www.youtube.com/watch?v=abc123")).toBe(true)
+  })
+
+  it("returns true for the bare youtube.com host (no www)", () => {
+    expect(isYouTubeWatchUrl("https://youtube.com/watch?v=abc123")).toBe(true)
+  })
+
+  it("returns false for the YouTube homepage (no video id)", () => {
+    expect(isYouTubeWatchUrl("https://www.youtube.com/")).toBe(false)
+  })
+
+  it("returns false for a youtube.com page that isn't /watch", () => {
+    expect(isYouTubeWatchUrl("https://www.youtube.com/results?search_query=cats")).toBe(false)
+  })
+
+  it("returns false for a non-YouTube site, even one that happens to have a v= param", () => {
+    expect(isYouTubeWatchUrl("https://example.com/watch?v=abc123")).toBe(false)
+  })
+
+  it("returns false for a lookalike hostname (not an actual youtube.com subdomain)", () => {
+    expect(isYouTubeWatchUrl("https://notyoutube.com.evil.com/watch?v=abc123")).toBe(false)
+  })
+
+  it("returns false for null/undefined/empty input", () => {
+    expect(isYouTubeWatchUrl(null)).toBe(false)
+    expect(isYouTubeWatchUrl(undefined)).toBe(false)
+    expect(isYouTubeWatchUrl("")).toBe(false)
+  })
+
+  it("returns false for an unparseable URL", () => {
+    expect(isYouTubeWatchUrl("not a url")).toBe(false)
   })
 })

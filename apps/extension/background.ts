@@ -31,7 +31,7 @@ import {
   DEFAULT_SPOKEN_LANGUAGE,
   STORAGE_KEYS,
 } from "./lib/languages"
-import { getVideoId } from "./lib/youtube-nav"
+import { getVideoId, isYouTubeWatchUrl } from "./lib/youtube-nav"
 import { resolveTabId as resolveTabIdImpl } from "./lib/tab-resolver"
 import { getSession, openSignInPage, setSessionFromRelay, signOut } from "./lib/auth"
 import { supabase } from "./lib/supabase"
@@ -132,6 +132,18 @@ async function closeOffscreen() {
 async function startCapture(tabId: number) {
   if (isCapturing) return
 
+  // Defense-in-depth: popup.tsx already disables the toggle off-YouTube, but
+  // guard here too — without it, capture would actually start (real audio,
+  // real Deepgram/DeepL cost) on ANY tab, even though contents/youtube.ts
+  // only ever runs on youtube.com/watch and so nothing would ever render
+  // the resulting captions. A silently broken, silently billed no-op.
+  const tabResult = await chrome.tabs.get(tabId).catch(() => null)
+  if (!isYouTubeWatchUrl(tabResult?.url)) {
+    console.error("[captio bg] startCapture called for a non-YouTube tab — refusing to start:", tabResult?.url)
+    return
+  }
+  const tab = tabResult
+
   try {
     // getMediaStreamId must be called from the service worker — only it can
     // request tab capture permission. The returned ID expires quickly, so pass
@@ -161,20 +173,15 @@ async function startCapture(tabId: number) {
     const accessToken = session?.access_token
 
     // Reset the transcript session buffer — see saveTranscriptSession().
+    // `tab` is already known good here (the guard above returned early
+    // otherwise) — no need for a second chrome.tabs.get call.
     sessionSegments = []
     sessionStartedAt = Date.now()
     sessionSpokenLanguage = spokenLanguage
     sessionCaptionLanguage = captionLanguage
-    try {
-      const tab = await chrome.tabs.get(tabId)
-      sessionVideoId = tab.url ? getVideoId(tab.url) : null
-      sessionVideoTitle = tab.title?.replace(/ - YouTube$/, "") ?? null
-      sessionVideoUrl = tab.url ?? null
-    } catch {
-      sessionVideoId = null
-      sessionVideoTitle = null
-      sessionVideoUrl = null
-    }
+    sessionVideoId = tab!.url ? getVideoId(tab!.url) : null
+    sessionVideoTitle = tab!.title?.replace(/ - YouTube$/, "") ?? null
+    sessionVideoUrl = tab!.url ?? null
 
     // Pass tabId alongside streamId so the offscreen doc can embed it in every
     // TRANSCRIPT message — this means transcripts reach the content script even

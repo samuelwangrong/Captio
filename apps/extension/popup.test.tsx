@@ -8,6 +8,7 @@ interface LoadPopupOptions {
   storage?: Record<string, any>
   tabTitle?: string
   tabId?: number
+  tabUrl?: string
   sendMessageImpl?: (message: any, callback?: (response?: any) => void) => void
 }
 
@@ -20,6 +21,7 @@ async function loadPopup(options: LoadPopupOptions = {}) {
     bus,
     tabId: options.tabId ?? 1,
     tabTitle: options.tabTitle ?? "Test Video - YouTube",
+    tabUrl: options.tabUrl,
   })
 
   const defaultSendMessage = (message: any, callback?: (response?: any) => void) => {
@@ -107,6 +109,33 @@ describe("popup.tsx", () => {
     )
     expect(toggle).toHaveAttribute("aria-checked", "true")
     expect(screen.getByText("Transcribing…")).toBeInTheDocument()
+  })
+
+  it("disables the toggle and shows a hint when the active tab isn't a YouTube video", async () => {
+    const { chromeMock } = await loadPopup({ tabUrl: "https://example.com/some-page" })
+
+    const toggle = await screen.findByRole("switch")
+    expect(toggle).toBeDisabled()
+    expect(screen.getByText("Open a YouTube video to enable captions")).toBeInTheDocument()
+
+    // Clicking a disabled switch shouldn't even attempt to message the background.
+    const sendMessage = chromeMock.runtime.sendMessage as ReturnType<typeof vi.fn>
+    sendMessage.mockClear()
+    await act(async () => {
+      await userEvent.click(toggle)
+    })
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "TOGGLE_CAPTIONS" }),
+      expect.any(Function)
+    )
+  })
+
+  it("enables the toggle on a YouTube watch tab (no hint shown)", async () => {
+    await loadPopup({ tabUrl: "https://www.youtube.com/watch?v=abc123" })
+
+    const toggle = await screen.findByRole("switch")
+    expect(toggle).toBeEnabled()
+    expect(screen.queryByText("Open a YouTube video to enable captions")).not.toBeInTheDocument()
   })
 
   it("clicking the settings button opens the extension options page", async () => {

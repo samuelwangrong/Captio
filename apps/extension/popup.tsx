@@ -7,6 +7,7 @@ import {
   SPOKEN_LANGUAGES,
   STORAGE_KEYS,
 } from "./lib/languages"
+import { isYouTubeWatchUrl } from "./lib/youtube-nav"
 
 type Status = "idle" | "transcribing" | "ready" | "error"
 
@@ -17,15 +18,24 @@ const STATUS_CONFIG: Record<Status, { label: string; color: string; pulse: boole
   error:        { label: "Error — retry", color: "bg-error",          pulse: false },
 }
 
-function Toggle({ active, onChange }: { active: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  active,
+  onChange,
+  disabled,
+}: {
+  active: boolean
+  onChange: (v: boolean) => void
+  disabled?: boolean
+}) {
   return (
     <button
       role="switch"
       aria-checked={active}
+      disabled={disabled}
       onClick={() => onChange(!active)}
       className={`relative w-9 h-5 rounded-full transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
         active ? "bg-accent" : "bg-surface-raised"
-      }`}
+      } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
     >
       <span
         className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-150 ${
@@ -43,6 +53,9 @@ export default function Popup() {
   const [userEmail, setUserEmail]   = useState<string | null>(null)
   const [spokenLanguage, setSpokenLanguage]   = useState(DEFAULT_SPOKEN_LANGUAGE)
   const [captionLanguage, setCaptionLanguage] = useState(DEFAULT_CAPTION_LANGUAGE)
+  // Defaults to true (permissive) so the toggle doesn't flash disabled while
+  // chrome.tabs.query resolves — the common case is a YouTube tab anyway.
+  const [isYouTubeVideo, setIsYouTubeVideo]   = useState(true)
 
   useEffect(() => {
     // Prefer the live Supabase session over the cached userEmail in storage.
@@ -98,10 +111,14 @@ export default function Popup() {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const title = tabs[0]?.title?.replace(" - YouTube", "") ?? "YouTube Video"
       setVideoTitle(title)
+      setIsYouTubeVideo(isYouTubeWatchUrl(tabs[0]?.url))
     })
   }, [])
 
   const handleToggle = (_val: boolean) => {
+    // Guards the disabled Toggle too (belt and suspenders — a disabled
+    // button's onClick shouldn't fire, but don't rely on that alone).
+    if (!isYouTubeVideo) return
     // Query the active tab from the popup context (more reliable than querying from the service worker)
     // then pass the tab ID along with the toggle message.
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -158,9 +175,16 @@ export default function Popup() {
         </section>
 
         {/* Toggle row */}
-        <section className="flex items-center justify-between py-space-2 mb-space-4">
-          <span className="text-body text-on-surface">Enable on this video</span>
-          <Toggle active={enabled} onChange={handleToggle} />
+        <section className="flex flex-col gap-1 py-space-2 mb-space-4">
+          <div className="flex items-center justify-between">
+            <span className="text-body text-on-surface">Enable on this video</span>
+            <Toggle active={enabled} onChange={handleToggle} disabled={!isYouTubeVideo} />
+          </div>
+          {!isYouTubeVideo && (
+            <span className="text-body-sm text-text-secondary">
+              Open a YouTube video to enable captions
+            </span>
+          )}
         </section>
 
         {/* Language pickers */}
