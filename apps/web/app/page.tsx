@@ -36,7 +36,7 @@ export default function LandingPage() {
             Captions that<br />actually work.
           </h1>
           <p className="text-lg text-text-secondary mb-space-8 max-w-xl">
-            Whisper-powered accuracy, full style control, and language learning — all on top of YouTube.
+            Deepgram-powered accuracy, full style control, and language learning — all on top of YouTube.
           </p>
           <div className="flex flex-col sm:flex-row gap-space-4 items-center">
             <a
@@ -95,7 +95,7 @@ export default function LandingPage() {
             {
               icon: "🎯",
               title: "More accurate",
-              desc:  "Whisper AI handles accents, technical jargon, and fast speech that YouTube's auto-captions miss.",
+              desc:  "Deepgram handles accents, technical jargon, and fast speech that YouTube's auto-captions miss.",
             },
             {
               icon: "🎨",

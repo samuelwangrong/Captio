@@ -4,7 +4,7 @@ import "./globals.css"
 export const metadata: Metadata = {
   title: "Captio — Captions that actually work",
   description:
-    "Accurate, beautiful captions for YouTube. Whisper-powered transcription with full style control.",
+    "Accurate, beautiful captions for YouTube. Deepgram-powered transcription with full style control.",
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
