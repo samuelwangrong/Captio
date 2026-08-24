@@ -42,6 +42,15 @@ let isCapturing = false
 let capturedTabId: number | null = null
 let offscreenReady = false
 
+// ─── Session time limit ─────────────────────────────────────────────────────
+// A tab forgotten with captions running would otherwise stream to Deepgram/
+// DeepL indefinitely — real, metered, per-minute/per-character cost with no
+// natural end. chrome.alarms (not setTimeout) is required here: MV3 service
+// workers get killed after ~30s of inactivity, and a plain timer would be
+// silently lost — alarms persist across restarts and wake the worker.
+const SESSION_LIMIT_ALARM = "captio-session-limit"
+const MAX_SESSION_MINUTES = 240 // 4 hours — generous enough for any normal video/stream
+
 // ─── Transcript session buffer ─────────────────────────────────────────────────
 // Every is_final TRANSCRIPT/TRANSLATION for the current capture is buffered
 // here and saved as one row in the `transcripts` table when the session ends
@@ -191,6 +200,7 @@ async function startCapture(tabId: number) {
     // Persist to storage — MV3 service workers can be killed at any time.
     // We restore capturedTabId from storage when we wake up for a TRANSCRIPT.
     chrome.storage.local.set({ captionsEnabled: true, capturedTabId: tabId })
+    chrome.alarms.create(SESSION_LIMIT_ALARM, { delayInMinutes: MAX_SESSION_MINUTES })
   } catch (err) {
     console.error("[captio bg] startCapture failed:", err)
     if (capturedTabId) chrome.tabs.sendMessage(capturedTabId, { type: "CAPTION_ERROR" })
@@ -210,6 +220,7 @@ async function cleanup() {
   isCapturing = false
   capturedTabId = null
   chrome.storage.local.set({ captionsEnabled: false, capturedTabId: null })
+  chrome.alarms.clear(SESSION_LIMIT_ALARM)
   await closeOffscreen()
 }
 
@@ -231,6 +242,21 @@ async function resolveTabId(msgTabId?: number | null): Promise<number | null> {
     },
   })
 }
+
+// ─── Session time limit ─────────────────────────────────────────────────────
+// Notify the tab BEFORE tearing down — cleanup() itself doesn't message the
+// tab, so unlike stopCapture() (which sends CAPTIONS_STOPPED and would wipe
+// this message out immediately via hideBox()), this ordering lets the
+// SESSION_TIME_LIMIT message actually stay visible. Mirrors how CAPTURE_ERROR
+// below also calls cleanup() directly rather than stopCapture() for the same
+// reason.
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== SESSION_LIMIT_ALARM || !isCapturing) return
+  if (capturedTabId) chrome.tabs.sendMessage(capturedTabId, { type: "SESSION_TIME_LIMIT" })
+  saveTranscriptSession()
+  cleanup()
+})
 
 // ─── Message router ───────────────────────────────────────────────────────────
 

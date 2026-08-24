@@ -132,6 +132,26 @@ describe("contents/youtube.ts", () => {
     expect(sendMessage).not.toHaveBeenCalledWith({ type: "PAUSE_CAPTURE" })
   })
 
+  it("SESSION_TIME_LIMIT shows a message and deactivates captions (background's 4-hour cap)", async () => {
+    const bus = createMessageBus()
+    const chromeMock = await loadContentScript(bus)
+    const sendMessage = vi.spyOn(chromeMock.runtime, "sendMessage")
+
+    dispatchToContentScript(bus, { type: "CAPTIONS_STARTED" })
+    dispatchToContentScript(bus, { type: "SESSION_TIME_LIMIT" })
+
+    const caption = document.getElementById("captio-caption")!
+    expect(caption.textContent).toBe("Captions stopped after 4 hours — click Enable to resume")
+    // The box stays visible (background sends this message deliberately
+    // without a follow-up CAPTIONS_STOPPED — see background.ts) so the user
+    // actually sees why captions stopped, rather than everything just vanishing.
+    expect(caption.classList.contains("captio-active")).toBe(true)
+
+    sendMessage.mockClear()
+    document.querySelector("video")!.dispatchEvent(new Event("pause"))
+    expect(sendMessage).not.toHaveBeenCalledWith({ type: "PAUSE_CAPTURE" })
+  })
+
   it("navigating to a new video while captions are active stops captions and hides the overlay", async () => {
     const bus = createMessageBus()
     const chromeMock = await loadContentScript(bus)

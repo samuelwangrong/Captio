@@ -48,7 +48,8 @@
       "tabs",
       "activeTab",
       "tabCapture",
-      "offscreen"
+      "offscreen",
+      "alarms"
     ]
   }
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { STORAGE_KEYS } from "./lib/languages"
-import { createChromeMock, createMessageBus, type MessageBus } from "./test/mocks/chrome"
+import { createChromeMock, createMessageBus, fireAlarm, type MessageBus } from "./test/mocks/chrome"
 
 /**
  * background.ts registers its `chrome.runtime.onMessage` listener as a
@@ -247,6 +247,79 @@ describe("background.ts message router", () => {
 
     const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
     expect(state).toEqual({ isCapturing: false })
+  })
+
+  describe("session time limit (chrome.alarms, not setTimeout — must survive a service-worker restart)", () => {
+    it("starting a capture creates the session-limit alarm for 4 hours", async () => {
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      expect(bus.alarms.get("captio-session-limit")).toEqual({ delayInMinutes: 240 })
+    })
+
+    it("stopping a capture clears the session-limit alarm", async () => {
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      expect(bus.alarms.has("captio-session-limit")).toBe(true)
+
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS" }, resolve))
+      expect(bus.alarms.has("captio-session-limit")).toBe(false)
+    })
+
+    it("the alarm firing notifies the tab and tears down capture state, without a CAPTIONS_STOPPED wiping the message", async () => {
+      const onContentMessage = vi.fn()
+      content.runtime.onMessage.addListener(onContentMessage)
+
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      onContentMessage.mockClear()
+
+      fireAlarm(bus, "captio-session-limit")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(onContentMessage).toHaveBeenCalledWith(
+        { type: "SESSION_TIME_LIMIT" },
+        expect.any(Object),
+        expect.any(Function)
+      )
+      // Unlike stopCapture()'s STOP_CAPTIONS/TOGGLE_CAPTIONS path, this teardown
+      // must NOT also send CAPTIONS_STOPPED — that would hide the message
+      // (content script's hideBox()) before the user ever sees it.
+      expect(onContentMessage).not.toHaveBeenCalledWith(
+        { type: "CAPTIONS_STOPPED" },
+        expect.any(Object),
+        expect.any(Function)
+      )
+
+      const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+      expect(state).toEqual({ isCapturing: false })
+      expect(bus.offscreenOpen).toBe(false)
+    })
+
+    it("a stale/late alarm firing after capture already stopped is a no-op", async () => {
+      const onContentMessage = vi.fn()
+      content.runtime.onMessage.addListener(onContentMessage)
+
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS" }, resolve))
+      onContentMessage.mockClear()
+
+      fireAlarm(bus, "captio-session-limit")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(onContentMessage).not.toHaveBeenCalled()
+    })
+
+    it("an unrelated alarm name is ignored", async () => {
+      const onContentMessage = vi.fn()
+      content.runtime.onMessage.addListener(onContentMessage)
+
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      onContentMessage.mockClear()
+
+      fireAlarm(bus, "some-other-alarm")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(onContentMessage).not.toHaveBeenCalled()
+      const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+      expect(state).toEqual({ isCapturing: true })
+    })
   })
 
   it("SAVE_VOCAB responds not_signed_in when there's no active Supabase session", async () => {

@@ -421,6 +421,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     setTimeout(() => { if (liveEl) liveEl.textContent = "" }, 4000)
     captionsActive = false
   }
+
+  if (msg.type === "SESSION_TIME_LIMIT") {
+    if (liveEl) liveEl.textContent = "Captions stopped after 4 hours — click Enable to resume"
+    if (committedEl) committedEl.textContent = ""
+    setTimeout(() => { if (liveEl) liveEl.textContent = "" }, 4000)
+    captionsActive = false
+  }
 })
 
 // ─── Init ──────────────────────────────────────────────────────────────────────

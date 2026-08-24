@@ -57,6 +57,10 @@ export interface MessageBus {
   tabCaptureStreamId: string
   /** If set, chrome.tabCapture.getMediaStreamId reports this as chrome.runtime.lastError instead of succeeding. */
   tabCaptureError: string | null
+  /** Alarms created via chrome.alarms.create, keyed by name — inspect to assert one was set/cleared. */
+  alarms: Map<string, { delayInMinutes?: number }>
+  /** Listeners registered via chrome.alarms.onAlarm.addListener (not per-context — alarms aren't scoped to a sender in real Chrome either). */
+  alarmListeners: Set<(alarm: { name: string }) => void>
 }
 
 export function createMessageBus(): MessageBus {
@@ -66,7 +70,14 @@ export function createMessageBus(): MessageBus {
     offscreenOpen: false,
     tabCaptureStreamId: "fake-stream-id",
     tabCaptureError: null,
+    alarms: new Map(),
+    alarmListeners: new Set(),
   }
+}
+
+/** Test helper: simulate the browser firing an alarm (chrome.alarms.onAlarm). */
+export function fireAlarm(bus: MessageBus, name: string) {
+  for (const listener of bus.alarmListeners) listener({ name })
 }
 
 function getContextListeners(bus: MessageBus, context: ChromeContext): Set<MessageListener> {
@@ -314,6 +325,28 @@ export function createChromeMock(options: MockChromeOptions) {
       },
       Reason: {
         USER_MEDIA: "USER_MEDIA",
+      },
+    },
+
+    alarms: {
+      create(name: string, alarmInfo?: { delayInMinutes?: number }) {
+        bus.alarms.set(name, alarmInfo ?? {})
+      },
+      clear(name: string, callback?: (wasCleared: boolean) => void) {
+        const existed = bus.alarms.delete(name)
+        if (callback) {
+          callback(existed)
+          return undefined
+        }
+        return Promise.resolve(existed)
+      },
+      onAlarm: {
+        addListener(listener: (alarm: { name: string }) => void) {
+          bus.alarmListeners.add(listener)
+        },
+        removeListener(listener: (alarm: { name: string }) => void) {
+          bus.alarmListeners.delete(listener)
+        },
       },
     },
   }
