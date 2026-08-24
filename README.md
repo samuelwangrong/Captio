@@ -67,6 +67,16 @@ CLI](https://supabase.com/docs/guides/cli) and Docker, `supabase start` runs
 it all locally; against a hosted project, `supabase link` then `supabase db
 push`.
 
+Once `apps/server/.env` has real Deepgram/DeepL keys, sanity-check them
+without opening a browser:
+
+```bash
+cd apps/server
+pnpm verify-keys                     # checks both keys are valid
+pnpm verify-keys path/to/audio.wav   # also streams it through a local proxy
+                                      # instance and prints the real transcript
+```
+
 ## Testing
 
 ```bash
