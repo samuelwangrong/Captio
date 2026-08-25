@@ -61,6 +61,8 @@ export interface MessageBus {
   alarms: Map<string, { delayInMinutes?: number }>
   /** Listeners registered via chrome.alarms.onAlarm.addListener (not per-context — alarms aren't scoped to a sender in real Chrome either). */
   alarmListeners: Set<(alarm: { name: string }) => void>
+  /** Listeners registered via chrome.tabs.onRemoved.addListener (not per-context, same as alarms). */
+  tabRemovedListeners: Set<(tabId: number) => void>
 }
 
 export function createMessageBus(): MessageBus {
@@ -72,12 +74,18 @@ export function createMessageBus(): MessageBus {
     tabCaptureError: null,
     alarms: new Map(),
     alarmListeners: new Set(),
+    tabRemovedListeners: new Set(),
   }
 }
 
 /** Test helper: simulate the browser firing an alarm (chrome.alarms.onAlarm). */
 export function fireAlarm(bus: MessageBus, name: string) {
   for (const listener of bus.alarmListeners) listener({ name })
+}
+
+/** Test helper: simulate a tab closing (chrome.tabs.onRemoved). */
+export function fireTabRemoved(bus: MessageBus, tabId: number) {
+  for (const listener of bus.tabRemovedListeners) listener(tabId)
 }
 
 function getContextListeners(bus: MessageBus, context: ChromeContext): Set<MessageListener> {
@@ -303,6 +311,11 @@ export function createChromeMock(options: MockChromeOptions) {
         }
         if (callback && !responded && !asyncResponseExpected) callback(undefined)
         return Promise.resolve()
+      },
+      onRemoved: {
+        addListener(listener: (tabId: number) => void) {
+          bus.tabRemovedListeners.add(listener)
+        },
       },
     },
 

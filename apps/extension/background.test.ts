@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { STORAGE_KEYS } from "./lib/languages"
-import { createChromeMock, createMessageBus, fireAlarm, type MessageBus } from "./test/mocks/chrome"
+import { createChromeMock, createMessageBus, fireAlarm, fireTabRemoved, type MessageBus } from "./test/mocks/chrome"
 
 /**
  * background.ts registers its `chrome.runtime.onMessage` listener as a
@@ -14,6 +14,7 @@ async function loadBackground(bus: MessageBus, options: { tabUrl?: string } = {}
   vi.stubGlobal("chrome", background)
   vi.resetModules()
   await import("./background")
+  return background
 }
 
 describe("background.ts message router", () => {
@@ -21,6 +22,7 @@ describe("background.ts message router", () => {
   let popup: ReturnType<typeof createChromeMock>
   let content: ReturnType<typeof createChromeMock>
   let offscreen: ReturnType<typeof createChromeMock>
+  let background: ReturnType<typeof createChromeMock>
 
   beforeEach(async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
@@ -28,7 +30,7 @@ describe("background.ts message router", () => {
     popup = createChromeMock({ context: "popup", bus })
     content = createChromeMock({ context: "content", bus })
     offscreen = createChromeMock({ context: "offscreen", bus })
-    await loadBackground(bus)
+    background = await loadBackground(bus)
   })
 
   afterEach(() => {
@@ -132,6 +134,29 @@ describe("background.ts message router", () => {
       expect.any(Object),
       expect.any(Function)
     )
+  })
+
+  it("double-clicking the toggle fast (two TOGGLE_CAPTIONS before the first's async chain resolves) does not run startCapture() twice", async () => {
+    // startCapture() sets isCapturing = true only after several real awaits
+    // (chrome.tabCapture.getMediaStreamId, chrome.storage.local.get,
+    // getSession()) — the popup's toggle has no in-flight guard (see
+    // popup.tsx's handleToggle), so a fast double-click sends a second
+    // TOGGLE_CAPTIONS while the first is still mid-flight and isCapturing is
+    // still false. Fire both without awaiting between them, matching that.
+    //
+    // Spies on getMediaStreamId (called once per startCapture() invocation,
+    // before anything overwritable like pendingStart/bus.alarms comes into
+    // play) rather than counting START_CAPTURE messages to the offscreen doc
+    // — pendingStart is a single scalar a second concurrent call would just
+    // overwrite, so counting messages sent could show "1" even if
+    // startCapture() genuinely ran twice.
+    const getMediaStreamId = vi.spyOn(background.tabCapture, "getMediaStreamId")
+
+    const first = new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+    const second = new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+    await Promise.all([first, second])
+
+    expect(getMediaStreamId).toHaveBeenCalledTimes(1)
   })
 
   it("TOGGLE_CAPTIONS while capturing stops capture, notifies the tab, and clears persisted state", async () => {
@@ -256,19 +281,17 @@ describe("background.ts message router", () => {
     )
   })
 
-  it("TOGGLE_CAPTIONS swallows a tabCapture failure and still resolves (existing behavior)", async () => {
+  it("TOGGLE_CAPTIONS reports the real outcome when startCapture fails internally, instead of assuming success", async () => {
     // chrome.tabCapture.getMediaStreamId reports lastError -> startCapture's
-    // catch block runs cleanup() (isCapturing -> false), but the message
-    // router's `await startCapture(tabId); sendResponse({isCapturing:true})`
-    // doesn't branch on success/failure, so it reports isCapturing: true
-    // even though capture did not actually start. This test documents that
-    // existing behavior so a future fix is a deliberate, visible change.
+    // own catch block runs cleanup() (isCapturing -> false) without
+    // rethrowing, so the message router must check the actual isCapturing
+    // state afterward rather than assume the call it just awaited succeeded.
     bus.tabCaptureError = "Tab capture permission denied"
 
     const response = await new Promise((resolve) =>
       popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve)
     )
-    expect(response).toEqual({ isCapturing: true })
+    expect(response).toEqual({ isCapturing: false, error: "Failed to start capture" })
 
     const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
     expect(state).toEqual({ isCapturing: false })
@@ -344,6 +367,46 @@ describe("background.ts message router", () => {
       expect(onContentMessage).not.toHaveBeenCalled()
       const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
       expect(state).toEqual({ isCapturing: true })
+    })
+  })
+
+  describe("captured tab closed (chrome.tabs.onRemoved)", () => {
+    it("closing the captured tab stops capture: tears down the offscreen doc and clears state", async () => {
+      const onOffscreenMessage = vi.fn()
+      offscreen.runtime.onMessage.addListener(onOffscreenMessage)
+
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+      expect(bus.offscreenOpen).toBe(true)
+
+      fireTabRemoved(bus, 5)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(onOffscreenMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ target: "offscreen", type: "STOP_CAPTURE" }),
+        expect.any(Object),
+        expect.any(Function)
+      )
+      const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+      expect(state).toEqual({ isCapturing: false })
+      expect(bus.offscreenOpen).toBe(false)
+      expect(bus.alarms.has("captio-session-limit")).toBe(false)
+    })
+
+    it("closing a different tab while capturing is a no-op", async () => {
+      await new Promise((resolve) => popup.runtime.sendMessage({ type: "TOGGLE_CAPTIONS", tabId: 5 }, resolve))
+
+      fireTabRemoved(bus, 999)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+      expect(state).toEqual({ isCapturing: true })
+      expect(bus.offscreenOpen).toBe(true)
+    })
+
+    it("closing any tab while not capturing is a no-op (no crash)", async () => {
+      expect(() => fireTabRemoved(bus, 5)).not.toThrow()
+      const state = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_STATE" }, resolve))
+      expect(state).toEqual({ isCapturing: false })
     })
   })
 

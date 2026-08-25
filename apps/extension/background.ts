@@ -42,6 +42,17 @@ let isCapturing = false
 let capturedTabId: number | null = null
 let offscreenReady = false
 
+// Guards TOGGLE_CAPTIONS against a fast double-click: the popup's toggle has
+// no in-flight/disabled state (see popup.tsx's handleToggle), and
+// startCapture() doesn't set isCapturing = true until after several real
+// awaits (chrome.tabCapture.getMediaStreamId, chrome.storage.local.get,
+// getSession()) — so a second TOGGLE_CAPTIONS arriving before the first
+// resolves would otherwise see isCapturing still false and run
+// startCapture() a second time concurrently (two tabCapture streams, two
+// offscreen START_CAPTUREs racing). A message arriving while one is already
+// in flight piggybacks on the same result instead of starting a redundant one.
+let inFlightToggle: Promise<{ isCapturing: boolean; error?: string }> | null = null
+
 // ─── Session time limit ─────────────────────────────────────────────────────
 // A tab forgotten with captions running would otherwise stream to Deepgram/
 // DeepL indefinitely — real, metered, per-minute/per-character cost with no
@@ -265,25 +276,56 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   cleanup()
 })
 
+// ─── Captured tab closed ────────────────────────────────────────────────────
+// Nothing else here listens for the source tab closing — without this, closing
+// a YouTube tab mid-capture wouldn't stop audio capture or the /transcribe
+// connection at all (the offscreen doc has no way to detect it either; the
+// stream just goes silent). That would silently keep streaming to
+// Deepgram/DeepL until the 4-hour session limit above eventually caught it —
+// real, metered cost for a tab that no longer exists, with no user-visible
+// sign anything was still running. stopCapture() (not cleanup() directly)
+// so whatever was already captured still gets saved.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (isCapturing && tabId === capturedTabId) {
+    stopCapture()
+  }
+})
+
 // ─── Message router ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // ── From popup ──
   if (msg.type === "TOGGLE_CAPTIONS") {
-    ;(async () => {
+    if (inFlightToggle) {
+      // Already toggling (see inFlightToggle's declaration) — piggyback on
+      // that result instead of starting a second, overlapping operation.
+      inFlightToggle.then(sendResponse)
+      return true
+    }
+
+    inFlightToggle = (async () => {
+      let result: { isCapturing: boolean; error?: string }
       if (isCapturing) {
         await stopCapture()
-        sendResponse({ isCapturing: false })
+        result = { isCapturing: false }
       } else {
         const tabId = msg.tabId
         if (tabId) {
           await startCapture(tabId)
-          sendResponse({ isCapturing: true })
+          // Reflect the real outcome, not an assumed one — startCapture()
+          // catches its own errors internally (tabCapture permission denied,
+          // non-YouTube tab, etc.) and rolls back to isCapturing: false via
+          // cleanup() without rethrowing, so a blind `{isCapturing: true}`
+          // here would tell the popup capture started when it didn't.
+          result = isCapturing ? { isCapturing: true } : { isCapturing: false, error: "Failed to start capture" }
         } else {
-          sendResponse({ isCapturing: false, error: "No active tab" })
+          result = { isCapturing: false, error: "No active tab" }
         }
       }
+      inFlightToggle = null
+      return result
     })()
+    inFlightToggle.then(sendResponse)
     return true
   }
 
