@@ -274,4 +274,71 @@ describe("/transcribe websocket proxy", () => {
       client.close()
     })
   })
+
+  describe("concurrent connection limits", () => {
+    async function waitOpen(ws: WebSocket) {
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", resolve)
+        ws.on("error", reject)
+      })
+    }
+
+    async function waitClose(ws: WebSocket): Promise<number> {
+      return new Promise((resolve) => ws.on("close", (code) => resolve(code)))
+    }
+
+    it("rejects a connection beyond the global cap with 1013, and accepts a new one once a slot frees up", async () => {
+      await server.close()
+      server = await buildServer({
+        logger: false,
+        maxConcurrentConnections: 1,
+        proxyOptions: { apiKey: "test-key", deepgramUrl: `ws://127.0.0.1:${mockDeepgramPort}` },
+      })
+      await server.listen({ port: 0, host: "127.0.0.1" })
+
+      const first = new WebSocket(transcribeUrl())
+      await waitOpen(first)
+
+      const second = new WebSocket(transcribeUrl())
+      const secondCloseCode = await waitClose(second)
+      expect(secondCloseCode).toBe(1013)
+
+      // Freeing the slot lets a new connection through.
+      first.close()
+      await waitClose(first)
+      const third = new WebSocket(transcribeUrl())
+      await expect(waitOpen(third)).resolves.toBeUndefined()
+      third.close()
+    })
+
+    it("rejects a connection beyond the per-user cap with 4029, while a different user is unaffected", async () => {
+      const getUser = vi.fn(async (token: string) => ({
+        data: { user: { id: token === "user-a-token" ? "user-a" : "user-b", email: "x@example.com" } },
+        error: null,
+      }))
+
+      await server.close()
+      server = await buildServer({
+        logger: false,
+        authClient: { auth: { getUser } as any },
+        maxConcurrentConnectionsPerUser: 1,
+        proxyOptions: { apiKey: "test-key", deepgramUrl: `ws://127.0.0.1:${mockDeepgramPort}` },
+      })
+      await server.listen({ port: 0, host: "127.0.0.1" })
+
+      const firstA = new WebSocket(`${transcribeUrl()}?token=user-a-token`)
+      await waitOpen(firstA)
+
+      const secondA = new WebSocket(`${transcribeUrl()}?token=user-a-token`)
+      const secondACloseCode = await waitClose(secondA)
+      expect(secondACloseCode).toBe(4029)
+
+      // A different user isn't affected by user-a's cap.
+      const firstB = new WebSocket(`${transcribeUrl()}?token=user-b-token`)
+      await expect(waitOpen(firstB)).resolves.toBeUndefined()
+
+      firstA.close()
+      firstB.close()
+    })
+  })
 })

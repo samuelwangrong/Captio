@@ -10,7 +10,14 @@ if (!process.env.DEEPGRAM_API_KEY) {
 }
 
 async function main() {
-  const server = await buildServer()
+  const server = await buildServer({
+    maxConcurrentConnections: process.env.MAX_CONCURRENT_CONNECTIONS
+      ? parseInt(process.env.MAX_CONCURRENT_CONNECTIONS)
+      : undefined,
+    maxConcurrentConnectionsPerUser: process.env.MAX_CONCURRENT_CONNECTIONS_PER_USER
+      ? parseInt(process.env.MAX_CONCURRENT_CONNECTIONS_PER_USER)
+      : undefined,
+  })
 
   await server.listen({ port: PORT, host: HOST })
   console.log(`Captio server listening on ws://${HOST}:${PORT}`)
