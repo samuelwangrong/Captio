@@ -269,6 +269,15 @@ export function createChromeMock(options: MockChromeOptions) {
         }
         return Promise.resolve(tabs)
       },
+      // chrome.tabs.create({ url }) — used by lib/auth.ts's openSignInPage().
+      create(_createProperties: { url: string }, callback?: (tab: any) => void) {
+        const tab = { id: tabId + 1, url: _createProperties.url }
+        if (callback) {
+          callback(tab)
+          return undefined
+        }
+        return Promise.resolve(tab)
+      },
       // chrome.tabs.get(tabId) — MV3 promise-based form, used by background.ts's
       // startCapture() to read the video's title/url for transcript saving.
       get(_targetTabId: number, callback?: (tab: any) => void) {

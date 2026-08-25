@@ -16,6 +16,23 @@ import { test as base, chromium, type BrowserContext } from "@playwright/test"
 // for a one-shot e2e run — so we test against the prod build, same as CI.
 export const EXTENSION_PATH = path.resolve(__dirname, "../../build/chrome-mv3-prod")
 
+// Whether the build being tested was made with real Supabase env vars (see
+// apps/extension/.env.example). Without them, lib/supabase.ts's client gets
+// constructed as createClient(undefined, undefined, ...) — this doesn't
+// crash the extension (most things, e.g. getSession(), work fine against an
+// empty/no-op client), but some auth methods — confirmed via manual
+// debugging: supabase.auth.setSession() specifically — never settle at all
+// against a client built this way, hanging indefinitely rather than
+// rejecting quickly like a normal network failure would. That's a real
+// gap in supabase-js's own behavior with malformed config, not something
+// this codebase can work around, and it only happens in a build with zero
+// Supabase credentials — which will never happen in a real deployment (auth
+// would be obviously, comprehensively broken and caught well before
+// shipping) but DOES happen in CI today, since no .env is checked in. Tests
+// that exercise those specific hang-prone auth methods should skip when this
+// is false rather than hang the whole suite.
+export const hasSupabaseCredentials = existsSync(path.resolve(__dirname, "../../.env"))
+
 export const test = base.extend<{
   context: BrowserContext
   extensionId: string

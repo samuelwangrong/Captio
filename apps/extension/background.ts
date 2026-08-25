@@ -374,8 +374,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // ── Auth messages ──
   if (msg.type === "AUTH_SESSION_RELAY") {
     ;(async () => {
-      await setSessionFromRelay(msg)
-      sendResponse({ ok: true })
+      const result = await setSessionFromRelay(msg)
+      sendResponse(result)
     })()
     return true
   }
@@ -390,7 +390,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === "SIGN_OUT") {
     ;(async () => {
-      await signOut()
+      try {
+        await signOut()
+      } catch (err) {
+        // Still clear local state even if telling Supabase failed (e.g. offline)
+        // — the user asked to sign out, and getting stuck "still signed in"
+        // locally because of a network blip would be worse than a session
+        // that lingers server-side until it naturally expires.
+        console.error("[captio bg] signOut failed (clearing local session anyway):", err)
+      }
       chrome.storage.local.remove("userEmail")
       sendResponse({ ok: true })
     })()

@@ -406,4 +406,80 @@ describe("background.ts message router", () => {
       )
     })
   })
+
+  describe("auth message routing", () => {
+    // These spy on lib/auth.ts's real exports rather than mocking the whole
+    // module, so background.ts's own destructured imports (which resolve to
+    // the same live module bindings) pick up the override too. lib/auth.ts's
+    // own internal behavior (e.g. setSessionFromRelay's error handling) has
+    // its own dedicated coverage in lib/auth.test.ts — this only checks that
+    // background.ts's message router forwards results/failures correctly.
+    async function loadBackgroundWithAuthSpy() {
+      bus.contexts.delete("background")
+      vi.resetModules()
+      const authLib = await import("./lib/auth")
+      const background = createChromeMock({ context: "background", bus, tabId: 5 })
+      vi.stubGlobal("chrome", background)
+      await import("./background")
+      return authLib
+    }
+
+    it("AUTH_SESSION_RELAY forwards setSessionFromRelay's result to the caller, including on failure", async () => {
+      const authLib = await loadBackgroundWithAuthSpy()
+      vi.spyOn(authLib, "setSessionFromRelay").mockResolvedValue({ ok: false, error: "invalid refresh token" })
+
+      const response = await new Promise((resolve) =>
+        content.runtime.sendMessage(
+          { type: "AUTH_SESSION_RELAY", accessToken: "at", refreshToken: "rt", email: "sam@example.com" },
+          resolve
+        )
+      )
+
+      expect(response).toEqual({ ok: false, error: "invalid refresh token" })
+    })
+
+    it("AUTH_SESSION_RELAY forwards a success result", async () => {
+      const authLib = await loadBackgroundWithAuthSpy()
+      vi.spyOn(authLib, "setSessionFromRelay").mockResolvedValue({ ok: true })
+
+      const response = await new Promise((resolve) =>
+        content.runtime.sendMessage(
+          { type: "AUTH_SESSION_RELAY", accessToken: "at", refreshToken: "rt" },
+          resolve
+        )
+      )
+
+      expect(response).toEqual({ ok: true })
+    })
+
+    it("SIGN_OUT still clears local state and responds ok:true even when signOut() throws", async () => {
+      const authLib = await loadBackgroundWithAuthSpy()
+      vi.spyOn(authLib, "signOut").mockRejectedValue(new Error("network down"))
+      bus.storage.set("userEmail", "sam@example.com")
+
+      const response = await new Promise((resolve) => popup.runtime.sendMessage({ type: "SIGN_OUT" }, resolve))
+
+      expect(response).toEqual({ ok: true })
+      expect(bus.storage.get("userEmail")).toBeUndefined()
+    })
+
+    it("GET_AUTH_SESSION returns whatever getSession() resolves to", async () => {
+      const authLib = await loadBackgroundWithAuthSpy()
+      const session = { access_token: "at", user: { email: "sam@example.com" } }
+      vi.spyOn(authLib, "getSession").mockResolvedValue(session as any)
+
+      const response = await new Promise((resolve) => popup.runtime.sendMessage({ type: "GET_AUTH_SESSION" }, resolve))
+
+      expect(response).toEqual({ session })
+    })
+
+    it("OPEN_SIGN_IN calls openSignInPage()", async () => {
+      const authLib = await loadBackgroundWithAuthSpy()
+      const openSignInPage = vi.spyOn(authLib, "openSignInPage").mockImplementation(() => {})
+
+      popup.runtime.sendMessage({ type: "OPEN_SIGN_IN" })
+
+      expect(openSignInPage).toHaveBeenCalled()
+    })
+  })
 })

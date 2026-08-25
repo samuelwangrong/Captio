@@ -63,4 +63,11 @@ jobs:
         run: pnpm --filter extension exec playwright install --with-deps chromium
 
       - name: E2E tests
+        # No Supabase env vars are configured here, so apps/extension/test/e2e/auth-relay.spec.ts's
+        # main case skips itself (see fixtures.ts's hasSupabaseCredentials) rather than
+        # exercising the real sign-in relay. To actually cover that path in CI, add
+        # PLASMO_PUBLIC_SUPABASE_URL/PLASMO_PUBLIC_SUPABASE_ANON_KEY as repo secrets
+        # (a real or disposable test Supabase project works — this test never signs in
+        # for real, it only needs a client that isn't constructed with undefined args)
+        # and pass them to both this step and "Build extension" above.
         run: pnpm test:e2e
