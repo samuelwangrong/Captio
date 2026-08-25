@@ -181,4 +181,82 @@ describe("contents/youtube.ts", () => {
 
     expect(sendMessage).not.toHaveBeenCalledWith({ type: "STOP_CAPTIONS" })
   })
+
+  describe("vocabulary saving (click a word in the committed row)", () => {
+    // Rolling a finished line from the live row into the committed row (as
+    // clickable word spans) depends on liveEl.clientHeight exceeding a
+    // computed single-line height — real layout jsdom doesn't do. Force the
+    // wrap condition true only for the second of two final phrases, so the
+    // first genuinely accumulates (as it would with a normal-length phrase)
+    // and the second is what triggers the roll-up, landing real committed
+    // text — not the "" liveAccum still holds if wrapping were forced on
+    // the very first phrase.
+    let originalClientHeight: PropertyDescriptor | undefined
+
+    beforeEach(() => {
+      originalClientHeight =
+        Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight") ??
+        Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")
+    })
+
+    afterEach(() => {
+      if (originalClientHeight) {
+        Object.defineProperty(HTMLElement.prototype, "clientHeight", originalClientHeight)
+      }
+    })
+
+    function forceLineWrap() {
+      vi.spyOn(window, "getComputedStyle").mockReturnValue({
+        lineHeight: "20px",
+        paddingTop: "4px",
+        paddingBottom: "4px",
+      } as CSSStyleDeclaration)
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 100 })
+    }
+
+    async function commitALine(bus: MessageBus, text: string) {
+      dispatchToContentScript(bus, { type: "CAPTIONS_STARTED" })
+      dispatchToContentScript(bus, { type: "TRANSCRIPT", text, isFinal: true }) // accumulates, no wrap yet
+      forceLineWrap()
+      dispatchToContentScript(bus, { type: "TRANSCRIPT", text: "next phrase", isFinal: true }) // triggers roll-up
+    }
+
+    it("clicking a committed word saves it and marks it visually saved", async () => {
+      const bus = createMessageBus()
+      const chromeMock = await loadContentScript(bus)
+      const sendMessage = vi.spyOn(chromeMock.runtime, "sendMessage")
+
+      await commitALine(bus, "hello world")
+
+      const words = document.querySelectorAll<HTMLElement>("#captio-committed .captio-word")
+      expect(words.length).toBeGreaterThan(0)
+      const helloSpan = [...words].find((el) => el.textContent === "hello")!
+      expect(helloSpan).toBeTruthy()
+
+      helloSpan.click()
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "SAVE_VOCAB", word: "hello", context: "hello world" })
+      )
+      expect(helloSpan.classList.contains("captio-saved")).toBe(true)
+    })
+
+    it("clicking the same word again while it's still marked saved does not save it twice", async () => {
+      const bus = createMessageBus()
+      const chromeMock = await loadContentScript(bus)
+      const sendMessage = vi.spyOn(chromeMock.runtime, "sendMessage")
+
+      await commitALine(bus, "hello world")
+      const helloSpan = [...document.querySelectorAll<HTMLElement>("#captio-committed .captio-word")].find(
+        (el) => el.textContent === "hello"
+      )!
+
+      helloSpan.click()
+      helloSpan.click()
+      helloSpan.click()
+
+      const saveVocabCalls = sendMessage.mock.calls.filter(([msg]) => msg.type === "SAVE_VOCAB")
+      expect(saveVocabCalls).toHaveLength(1)
+    })
+  })
 })

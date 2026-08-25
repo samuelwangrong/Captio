@@ -167,6 +167,11 @@ function removeOverlay() {
 // `vocabulary` table via background.ts's SAVE_VOCAB handler.
 
 function saveVocabWord(word: string, context: string, target: HTMLElement) {
+  // Without this, clicking the same word again while it's still showing the
+  // "saved" flash (or just double-clicking) sends a second SAVE_VOCAB and
+  // creates a duplicate row — nothing else here dedupes.
+  if (target.classList.contains("captio-saved")) return
+
   const cleaned = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
   if (!cleaned) return
 
