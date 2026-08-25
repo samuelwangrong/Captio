@@ -319,6 +319,33 @@ describe("tabs/offscreen.tsx", () => {
     expect(createdAudioContexts).toHaveLength(0)
   })
 
+  it("ignores a second START_CAPTURE that arrives while the first is still mid-setup", async () => {
+    // getUserMedia below has several real awaits before the first call
+    // finishes (matching the real implementation's own multi-step async
+    // setup) — dispatch two START_CAPTURE messages back-to-back, without
+    // awaiting between them, so the second genuinely lands before the first
+    // resolves. Without isCapturingRef's guard, this would open two real
+    // tabCapture streams and two pairs of AudioContexts concurrently.
+    let resolveGetUserMedia: (stream: any) => void
+    const getUserMedia = vi.fn(() => new Promise((resolve) => { resolveGetUserMedia = resolve }))
+    await loadOffscreenPage(bus, getUserMedia as any)
+
+    const listener = getOffscreenListener(bus)
+    await act(async () => {
+      listener({ target: "offscreen", type: "START_CAPTURE", streamId: "stream-1", tabId: 5 }, {}, () => {})
+      listener({ target: "offscreen", type: "START_CAPTURE", streamId: "stream-2", tabId: 6 }, {}, () => {})
+      resolveGetUserMedia!({})
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: "stream-1" } },
+      video: false,
+    })
+    expect(createdAudioContexts).toHaveLength(2) // passCtx + captureCtx from the one accepted call
+  })
+
   describe("language settings (Spoken language / Caption language pickers)", () => {
     // background.ts resolves the stored Spoken/Caption language picker
     // choices (offscreen documents can't access chrome.storage) and forwards

@@ -73,6 +73,15 @@ export default function OffscreenPage() {
   // tabId from START_CAPTURE is embedded in every TRANSCRIPT message so
   // the background can deliver it even after a service-worker restart.
   const tabIdRef      = useRef<number | null>(null)
+  // Guards against a second START_CAPTURE arriving while one is still mid-flight
+  // (getUserMedia/AudioContext setup below has several real awaits before
+  // wsRef.current is even set) — without this, a duplicate message would open
+  // a second real tabCapture stream, WebSocket, and pair of AudioContexts
+  // concurrently. background.ts already guards against the most likely
+  // trigger for this (a fast double-click — see its inFlightToggle), but this
+  // is the layer that would actually pay the cost if that guard were ever
+  // bypassed or a duplicate message reached here some other way.
+  const isCapturingRef = useRef(false)
 
   useEffect(() => {
     trySend({ type: "OFFSCREEN_READY" })
@@ -95,6 +104,11 @@ export default function OffscreenPage() {
   // ─── Capture ────────────────────────────────────────────────────────────────
 
   async function startCapture(streamId: string, tabId?: number, spokenLanguage?: string, captionLanguage?: string, accessToken?: string) {
+    if (isCapturingRef.current) {
+      console.warn("[captio offscreen] startCapture called while already capturing — ignoring")
+      return
+    }
+    isCapturingRef.current = true
     tabIdRef.current = tabId ?? null
     isPausedRef.current = false
     try {
@@ -213,6 +227,7 @@ export default function OffscreenPage() {
     } catch (err: any) {
       console.error("[captio offscreen] startCapture error:", err)
       trySend({ type: "CAPTURE_ERROR", message: err.message ?? String(err) })
+      isCapturingRef.current = false
     }
   }
 
@@ -241,6 +256,7 @@ export default function OffscreenPage() {
   // ─── Stop ───────────────────────────────────────────────────────────────────
 
   function stopCapture() {
+    isCapturingRef.current = false
     if (keepAliveRef.current) { clearInterval(keepAliveRef.current); keepAliveRef.current = null }
     processorRef.current?.disconnect()
     processorRef.current = null
